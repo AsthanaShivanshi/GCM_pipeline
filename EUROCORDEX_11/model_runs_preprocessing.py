@@ -2,12 +2,32 @@ import os
 import xarray as xr
 import numpy as np
 import config
+import subprocess
 
 CH_BOX = (5, 11, 45, 48)
 
+def remap_mask_to_model(mask_path, model_path, remapped_mask_path):
+    if not os.path.exists(remapped_mask_path):
+        cmd = [
+            "cdo",
+            f"remapnn,{model_path}",
+            mask_path,
+            remapped_mask_path
+        ]
+        print("Running:", " ".join(cmd))
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        print(result.stdout)
+        print(result.stderr)
+        if result.returncode != 0 or not os.path.exists(remapped_mask_path):
+            raise RuntimeError(f"CDO remapnn failed for {mask_path}")
+
 def masking(input_path, mask_path, output_folder, varname, mask_varname):
     try:
-        with xr.open_dataset(input_path) as ds, xr.open_dataset(mask_path) as mask_ds:
+
+        remapped_mask_path = mask_path.replace(".nc", "_remapped.nc")
+        remap_mask_to_model(mask_path, input_path, remapped_mask_path)
+
+        with xr.open_dataset(input_path) as ds, xr.open_dataset(remapped_mask_path) as mask_ds:
             lat2d = ds['lat'].values
             lon2d = ds['lon'].values
 
@@ -33,8 +53,12 @@ def masking(input_path, mask_path, output_folder, varname, mask_varname):
             ds.to_netcdf(output_path)
             print(f"Processed: {input_path} -> {output_path}")
 
+        if os.path.exists(remapped_mask_path):
+            os.remove(remapped_mask_path)
+
     except Exception as e:
         print(f"Error processing {input_path}: {e}")
+
 
 VAR_CONFIG = {
     "pr": {
