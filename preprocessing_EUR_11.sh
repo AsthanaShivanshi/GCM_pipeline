@@ -10,6 +10,7 @@
 ##SBATCH --partition=gpu
 
 source environment.sh
+module load cdo
 export PYTHONPATH="$PROJECT_DIR"
 mkdir -p logs/preprocess_EUR_11
 
