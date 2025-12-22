@@ -7,6 +7,7 @@ import xarray as xr
 import numpy as np
 import config
 import subprocess
+import tempfile
 
 CH_BOX = (5, 11, 45, 48)
 
@@ -23,9 +24,15 @@ def remap(model_path, mask_path, remapped_model_path):
         print(result.stdout)
         print(result.stderr)
 
+
+
+
+# Remidner to self: note: Cropping is by rlat/rlon index, but mask is by 2D lat/lon physical coordinates
+
 def masking(input_path, mask_path, output_folder, varname, mask_varname):
     try:
-        remapped_model_path = input_path.replace(".nc", "_remapped.nc")
+        with tempfile.NamedTemporaryFile(suffix=".nc", delete=False) as tmp:
+            remapped_model_path = tmp.name
         remap(input_path, mask_path, remapped_model_path)
 
         with xr.open_dataset(remapped_model_path) as ds, xr.open_dataset(mask_path) as mask_ds:
