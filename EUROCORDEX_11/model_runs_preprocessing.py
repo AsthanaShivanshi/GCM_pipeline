@@ -2,11 +2,10 @@ import os
 import xarray as xr
 import numpy as np
 import config
-from scipy.spatial import cKDTree
 
 CH_BOX = (5, 11, 45, 48)
 
-def masking(input_path, mask_path, output_folder, varname):
+def masking(input_path, mask_path, output_folder, varname, mask_varname):
     try:
         with xr.open_dataset(input_path) as ds, xr.open_dataset(mask_path) as mask_ds:
             lat2d = ds['lat'].values
@@ -17,8 +16,7 @@ def masking(input_path, mask_path, output_folder, varname):
                 (lat2d >= CH_BOX[2]) & (lat2d <= CH_BOX[3])
             )
 
-            mask_var = list(mask_ds.data_vars)[0]
-            mask_data = mask_ds[mask_var].isel(time=0) if 'time' in mask_ds[mask_var].dims else mask_ds[mask_var]
+            mask_data = mask_ds[mask_varname].isel(time=0) if 'time' in mask_ds[mask_varname].dims else mask_ds[mask_varname]
             mask_non_nan = ~np.isnan(mask_data.values)
 
             model_mask = bbox_mask & mask_non_nan
@@ -41,22 +39,26 @@ def masking(input_path, mask_path, output_folder, varname):
 VAR_CONFIG = {
     "pr": {
         "input_folder": os.path.join(config.EUROCORDEX_11_DIR, "pr"),
-        "mask_path": os.path.join(config.BASE_DIR, "sasthana/Downscaling/Downscaling_Models/Model_Runs/precip_MPI-CSC-REMO2009_MPI-M-MPI-ESM-LR_rcp85_1971-2099/precip_r01_coarse_masked.nc"),
+        "mask_path": os.path.join(config.MODEL_RUNS_DIR, "precip_MPI-CSC-REMO2009_MPI-M-MPI-ESM-LR_rcp85_1971-2099/precip_r01_coarse_masked.nc"),
+        "mask_varname": "precip",
         "output_folder": os.path.join(config.EUROCORDEX_11_DIR, "pr_Swiss"),
     },
     "tas": {
         "input_folder": os.path.join(config.EUROCORDEX_11_DIR, "tas"),
-        "mask_path": os.path.join(config.DATASETS_TRAINING_DIR, "temp_mask_11km.nc"),
+        "mask_path": os.path.join(config.DATASETS_TRAINING_DIR, "TabsD_step2_coarse.nc"),
+        "mask_varname": "TabsD",
         "output_folder": os.path.join(config.EUROCORDEX_11_DIR, "tas_Swiss"),
     },
     "tasmax": {
         "input_folder": os.path.join(config.EUROCORDEX_11_DIR, "tasmax"),
-        "mask_path": os.path.join(config.DATASETS_TRAINING_DIR, "temp_mask_11km.nc"),
+        "mask_path": os.path.join(config.DATASETS_TRAINING_DIR, "TabsD_step2_coarse.nc"),
+        "mask_varname": "TabsD",
         "output_folder": os.path.join(config.EUROCORDEX_11_DIR, "tasmax_Swiss"),
     },
     "tasmin": {
         "input_folder": os.path.join(config.EUROCORDEX_11_DIR, "tasmin"),
-        "mask_path": os.path.join(config.DATASETS_TRAINING_DIR, "temp_mask_11km.nc"),
+        "mask_path": os.path.join(config.DATASETS_TRAINING_DIR, "TabsD_step2_coarse.nc"),
+        "mask_varname": "TabsD",
         "output_folder": os.path.join(config.EUROCORDEX_11_DIR, "tasmin_Swiss"),
     },
 }
@@ -66,7 +68,7 @@ def process_var(varname, cfg):
     files = [f for f in os.listdir(cfg["input_folder"]) if f.endswith(".nc")]
     for fname in files:
         input_path = os.path.join(cfg["input_folder"], fname)
-        masking(input_path, cfg["mask_path"], cfg["output_folder"], varname)
+        masking(input_path, cfg["mask_path"], cfg["output_folder"], varname, cfg["mask_varname"])
 
 if __name__ == "__main__":
     for varname, cfg in VAR_CONFIG.items():
