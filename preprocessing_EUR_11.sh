@@ -14,4 +14,4 @@ export PYTHONPATH="$PROJECT_DIR"
 mkdir -p logs/preprocess_EUR_11
 
 cd "$BASE_DIR/sasthana/Downscaling/GCM_pipeline"
-python EUROCORDEX_11/model_outputs_preprocessing.py
+python EUROCORDEX_11/model_runs_preprocessing.py
