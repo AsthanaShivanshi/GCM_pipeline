@@ -1,11 +1,11 @@
 #!/bin/bash
-#SBATCH --job-name=Preprocess_EUR_11
+#SBATCH --job-name=EUR_11_Preprocess
 #SBATCH --output=logs/preprocess_EUR_11/job_output-%j.txt
 #SBATCH --error=logs/preprocess_EUR_11/job_error-%j.txt
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --time=10:00:00
-#SBATCH --mem=256G
+#SBATCH --mem=512G
 #SBATCH --partition=cpu
 ##SBATCH --partition=gpu
 
