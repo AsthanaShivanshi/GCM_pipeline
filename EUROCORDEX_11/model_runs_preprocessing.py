@@ -1,3 +1,7 @@
+
+#Shitshow with xarray,,,repeated weird shapes problem with regrodder as well-. 
+#  CDO better for this task
+
 import os
 import xarray as xr
 import numpy as np
@@ -18,8 +22,6 @@ def remap(model_path, mask_path, remapped_model_path):
         result = subprocess.run(cmd, capture_output=True, text=True)
         print(result.stdout)
         print(result.stderr)
-        if result.returncode != 0 or not os.path.exists(remapped_model_path):
-            raise RuntimeError(f"CDO remapnn failed for {model_path}")
 
 def masking(input_path, mask_path, output_folder, varname, mask_varname):
     try:
@@ -50,7 +52,6 @@ def masking(input_path, mask_path, output_folder, varname, mask_varname):
 
             output_path = os.path.join(output_folder, os.path.basename(input_path))
             ds.to_netcdf(output_path)
-            print(f"Processed: {input_path} -> {output_path}")
 
         if os.path.exists(remapped_model_path):
             os.remove(remapped_model_path)
