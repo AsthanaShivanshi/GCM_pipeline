@@ -10,27 +10,48 @@ CH_BOX = (5, 11, 45, 48)
 
 def masking(input_path, mask_path, output_folder, varname):
     try:
-        ds = xr.open_dataset(input_path)
-        mask_ds = xr.open_dataset(mask_path)
+        with xr.open_dataset(input_path) as ds, xr.open_dataset(mask_path) as mask_ds:
+            # Get 2D lat/lon
+            lat2d = ds['lat']
+            lon2d = ds['lon']
 
-        # Use 2D lon/lat variables for masking
-        lon2d = ds['lon'].values
-        lat2d = ds['lat'].values
-        mask_ch = (
-            (lon2d >= CH_BOX[0]) & (lon2d <= CH_BOX[1]) &
-            (lat2d >= CH_BOX[2]) & (lat2d <= CH_BOX[3])
-        )
+            # Create mask for Swiss bounding box
+            swiss_mask = (
+                (lon2d >= CH_BOX[0]) & (lon2d <= CH_BOX[1]) &
+                (lat2d >= CH_BOX[2]) & (lat2d <= CH_BOX[3])
+            )
 
-        # Mask the data
-        data_array = ds[varname].values
-        masked_data = np.where(mask_ch, data_array, np.nan)
+            # Find indices where mask is True
+            idx = np.where(swiss_mask)
+            if len(idx[0]) == 0 or len(idx[1]) == 0:
+                print(f"No grid points in Swiss bounding box for {input_path}")
+                return
 
-        ds[varname].values = masked_data
-        output_path = os.path.join(output_folder, os.path.basename(input_path))
-        ds.to_netcdf(output_path)
-        ds.close()
-        mask_ds.close()
-        print(f"Processed: {input_path} -> {output_path}")
+            # Get unique indices for cropping
+            rlat_idx = np.unique(idx[0])
+            rlon_idx = np.unique(idx[1])
+
+            # Crop dataset to Swiss bounding box using isel
+            ds_crop = ds.isel(rlat=rlat_idx, rlon=rlon_idx)
+
+            # Assign E and N from mask (assumes mask has dims E, N)
+            # Interpolate mask E/N grid to cropped lat/lon grid if needed
+            if {'E', 'N'}.issubset(mask_ds.dims):
+                # Assign as coordinates
+                ds_crop = ds_crop.assign_coords(
+                    E=(('rlat', 'rlon'), mask_ds['E'].values),
+                    N=(('rlat', 'rlon'), mask_ds['N'].values)
+                )
+            else:
+                print(f"Mask file does not have E and N dimensions for {input_path}")
+
+            # Drop rlat and rlon dimensions if you don't need them
+            ds_crop = ds_crop.drop_vars(['rlat', 'rlon'])
+
+            # Save output
+            output_path = os.path.join(output_folder, os.path.basename(input_path))
+            ds_crop.to_netcdf(output_path)
+            print(f"Processed: {input_path} -> {output_path}")
     except Exception as e:
         print(f"Error processing {input_path}: {e}")
 
