@@ -1,0 +1,11 @@
+import os
+BASE_DIR = os.environ.get("BASE_DIR", "/work/FAC/FGSE/IDYST/tbeucler/downscaling")
+DATASETS_TRAINING_DIR= os.environ.get("DATASETS_TRAINING_DIR", f"{BASE_DIR}/sasthana/Downscaling/Downscaling_Models/Dataset_Setup_I_Chronological_12km")
+UNET_1971_DIR= os.environ.get("UNET_1971", f"{BASE_DIR}/sasthana/Downscaling/Downscaling_Models/Dataset_Setup_I_Chronological_12km")
+TARGET_DIR= os.environ.get("TARGET_DIR", f"{BASE_DIR}/sasthana/Downscaling/Processing_and_Analysis_Scripts/data_1971_2023/HR_files_full")   
+MODELS_RUNS_EUROCORDEX_11_RCP85= os.environ.get("MODELS_RUNS_EUROCORDEX_11_RCP85", f"{BASE_DIR}/sasthana/Downscaling/GCM_pipeline/EUROCORDEX_11_RCP8.5")
+MODEL_RUNS_EUROCORDEX_11_RCP45= os.environ.get("MODEL_RUNS_EUROCORDEX_11_RCP45", f"{BASE_DIR}/sasthana/Downscaling/GCM_pipeline/EUROCORDEX_11_RCP4.5")
+MODEL_RUNS_EUROCORDEX_11_RCP26= os.environ.get("MODEL_RUNS_EUROCORDEX_11_RCP26", f"{BASE_DIR}/sasthana/Downscaling/GCM_pipeline/EUROCORDEX_11_RCP2.6")
+OUTPUTS_MODELS_DIR= os.environ.get("OUTPUTS_MODELS_DIR", f"{BASE_DIR}/sasthana/Downscaling/Downscaling_Models/Outputs")
+BC_SCRIPTS= os.environ.get("BC_SCRIPTS", f"{BASE_DIR}/sasthana/Downscaling/GCM_pipeline/BC_methods")
+SCRATCH_DIR= os.environ.get("SCRATCH_DIR", f"/scratch/sasthana")

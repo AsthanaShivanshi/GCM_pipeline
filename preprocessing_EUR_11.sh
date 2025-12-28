@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --job-name=EUR_11_Preprocessing_pr_rcp85
-#SBATCH --output=logs/preprocess_pr_rcp85_job_output-%j.txt
-#SBATCH --error=logs/preprocess_pr_rcp85_job_error-%j.txt
+#SBATCH --job-name=EUR_11_Preprocessing_tasmax_rcp45
+#SBATCH --output=logs/preprocess_tasmax_rcp45_job_output-%j.txt
+#SBATCH --error=logs/preprocess_tasmax_rcp45_job_error-%j.txt
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --time=15:00:00
@@ -15,4 +15,4 @@ export PYTHONPATH="$PROJECT_DIR"
 mkdir -p logs
 
 cd "$BASE_DIR/sasthana/Downscaling/GCM_pipeline"
-python EUROCORDEX_11_RCP8.5/model_runs_preprocessing.py
+python EUROCORDEX_11_RCP4.5/model_runs_preprocessing.py
