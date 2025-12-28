@@ -7,8 +7,16 @@ import xarray as xr
 import numpy as np
 import config
 import subprocess
-import tempfile
 
+#DEBUG prints
+import netCDF4
+import h5netcdf
+import xarray
+print(netCDF4.__version__)
+print(h5netcdf.__version__)
+print(xarray.__version__)
+
+#CH bounding box
 CH_BOX = (5, 11, 45, 48)
 
 def remap(model_path, mask_path, remapped_model_path):
@@ -25,17 +33,25 @@ def remap(model_path, mask_path, remapped_model_path):
         print(result.stderr)
 
 
+# Remidner to self: note: Cropping is by rlat/rlon index, but mask is by 2D lat/lon physical cords
 
-
-# Remidner to self: note: Cropping is by rlat/rlon index, but mask is by 2D lat/lon physical coordinates
 
 def masking(input_path, mask_path, output_folder, varname, mask_varname):
     try:
-        with tempfile.NamedTemporaryFile(suffix=".nc", delete=False) as tmp:
-            remapped_model_path = tmp.name
+        base = os.path.splitext(os.path.basename(input_path))[0]
+        remapped_model_path = os.path.join(output_folder, f"{base}_remapped.nc")
         remap(input_path, mask_path, remapped_model_path)
 
         with xr.open_dataset(remapped_model_path) as ds, xr.open_dataset(mask_path) as mask_ds:
+            # Detect spatial dimension names
+            ydim = 'N' if 'N' in ds.dims else 'rlat'
+            xdim = 'E' if 'E' in ds.dims else 'rlon'
+
+            # Assign lat/lon from mask file to remapped dataset
+            if 'lat' in mask_ds and 'lon' in mask_ds:
+                ds = ds.assign_coords(lat=(ydim, xdim, mask_ds['lat'].values),
+                                     lon=(ydim, xdim, mask_ds['lon'].values))
+
             lat2d = ds['lat'].values
             lon2d = ds['lon'].values
 
@@ -53,9 +69,9 @@ def masking(input_path, mask_path, output_folder, varname, mask_varname):
 
             valid_idx = np.where(model_mask)
             if valid_idx[0].size > 0:
-                rlat_min, rlat_max = valid_idx[0].min(), valid_idx[0].max() + 1
-                rlon_min, rlon_max = valid_idx[1].min(), valid_idx[1].max() + 1
-                ds = ds.isel(rlat=slice(rlat_min, rlat_max), rlon=slice(rlon_min, rlon_max))
+                y_min, y_max = valid_idx[0].min(), valid_idx[0].max() + 1
+                x_min, x_max = valid_idx[1].min(), valid_idx[1].max() + 1
+                ds = ds.isel({ydim: slice(y_min, y_max), xdim: slice(x_min, x_max)})
 
             output_path = os.path.join(output_folder, os.path.basename(input_path))
             ds.to_netcdf(output_path)
@@ -65,6 +81,7 @@ def masking(input_path, mask_path, output_folder, varname, mask_varname):
 
     except Exception as e:
         print(f"Error processing {input_path}: {e}")
+
 
 
 VAR_CONFIG = {
