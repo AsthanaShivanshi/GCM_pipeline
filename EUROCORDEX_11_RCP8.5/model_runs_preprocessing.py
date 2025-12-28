@@ -9,8 +9,8 @@ CH_BOX = (5, 11, 45, 48)
 # Mask file path
 TEMP_MASK_PATH = f"{config.BASE_DIR}/sasthana/Downscaling/Downscaling_Models/temp_mask_12km.nc"
 
-TEMP_INPUT_DIR = f"{config.MODELS_RUNS_EUROCORDEX_11_RCP85}/tas"
-TEMP_OUTPUT_DIR = f"{config.BASE_DIR}/sasthana/Downscaling/GCM_pipeline/EUROCORDEX_11_RCP8.5/tas_Swiss"
+TEMP_INPUT_DIR = f"{config.MODELS_RUNS_EUROCORDEX_11_RCP85}/tasmax"
+TEMP_OUTPUT_DIR = f"{config.BASE_DIR}/sasthana/Downscaling/GCM_pipeline/EUROCORDEX_11_RCP8.5/tasmax_Swiss"
 
 if not os.path.exists(TEMP_OUTPUT_DIR):
     os.makedirs(TEMP_OUTPUT_DIR, exist_ok=True)
@@ -77,4 +77,4 @@ temp_files = sorted(glob.glob(os.path.join(TEMP_INPUT_DIR, "*.nc")))
 for src in temp_files:
     filename = os.path.basename(src)
     out = os.path.join(TEMP_OUTPUT_DIR, filename)
-    process_file(src, out, "tas", "tas", TEMP_MASK_PATH)
+    process_file(src, out, "tasmax", "tasmax", TEMP_MASK_PATH)
