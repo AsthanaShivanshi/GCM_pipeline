@@ -7,10 +7,10 @@ import xarray as xr
 CH_BOX = (5, 11, 45, 48)
 
 # Mask file path
-TEMP_MASK_PATH = f"{config.BASE_DIR}/sasthana/Downscaling/Downscaling_Models/precip_mask_12km.nc"
+TEMP_MASK_PATH = f"{config.BASE_DIR}/sasthana/Downscaling/Downscaling_Models/temp_mask_12km.nc"
 
-TEMP_INPUT_DIR = f"{config.MODEL_RUNS_EUROCORDEX_11_RCP26}/pr"
-TEMP_OUTPUT_DIR = f"{config.MODEL_RUNS_EUROCORDEX_11_RCP26}/pr_Swiss"
+TEMP_INPUT_DIR = f"{config.MODEL_RUNS_EUROCORDEX_11_RCP26}/tasmax"
+TEMP_OUTPUT_DIR = f"{config.MODEL_RUNS_EUROCORDEX_11_RCP26}/tasmax_Swiss"
 
 if not os.path.exists(TEMP_OUTPUT_DIR):
     os.makedirs(TEMP_OUTPUT_DIR, exist_ok=True)
@@ -53,7 +53,7 @@ def process_file(source, outname, oldvar, newvar, mask_path):
         ds = xr.open_dataset(step2)
         ds = ds.rename({oldvar: newvar})
         mask_ds = xr.open_dataset(mask_path)
-        mask = mask_ds["RhiresD"]
+        mask = mask_ds["TabsD"]
 
         ds[newvar] = ds[newvar].where(mask)
         ds.to_netcdf(outname, mode="w")
@@ -77,4 +77,4 @@ temp_files = sorted(glob.glob(os.path.join(TEMP_INPUT_DIR, "*.nc")))
 for src in temp_files:
     filename = os.path.basename(src)
     out = os.path.join(TEMP_OUTPUT_DIR, filename)
-    process_file(src, out, "pr", "pr", TEMP_MASK_PATH)
+    process_file(src, out, "tasmax", "tasmax", TEMP_MASK_PATH)
