@@ -1,29 +1,41 @@
+import importlib.util
+spec = importlib.util.spec_from_file_location("config", "/work/FAC/FGSE/IDYST/tbeucler/downscaling/sasthana/Downscaling/GCM_pipeline/EUROCORDEX_11_RCP8.5/config.py")
+#problems with config impirt ,, had to use absolute path . 
+
+config = importlib.util.module_from_spec(spec)
+import glob
+import os
+from tqdm import tqdm
+
+spec.loader.exec_module(config)
+
 import xarray as xr
+
 import numpy as np
-import config
+
+from joblib import Parallel, delayed
+
+from scipy.interpolate import interp1d
+
 from SBCK import dOTC
 from joblib import Parallel, delayed
-from tqdm import tqdm
+
 import warnings  
 warnings.filterwarnings("ignore", category=DeprecationWarning) 
 
-var_names = ["temp", "precip", "tmin", "tmax"]
-obs_var_names = ["TabsD", "RhiresD", "TminD", "TmaxD"]
+var_names = ["tas", "precip"]
+obs_var_names = ["TabsD", "RhiresD"]
 
 
 
 model_paths = [
-    f"{config.MODELS_DIR}/temp_MPI-CSC-REMO2009_MPI-M-MPI-ESM-LR_rcp85_1971-2099/temp_r01_coarse_masked.nc",
-    f"{config.MODELS_DIR}/precip_MPI-CSC-REMO2009_MPI-M-MPI-ESM-LR_rcp85_1971-2099/precip_r01_coarse_masked.nc",
-    f"{config.MODELS_DIR}/tmin_MPI-CSC-REMO2009_MPI-M-MPI-ESM-LR_rcp85_1971-2099/tmin_r01_coarse_masked.nc",
-    f"{config.MODELS_DIR}/tmax_MPI-CSC-REMO2009_MPI-M-MPI-ESM-LR_rcp85_1971-2099/tmax_r01_coarse_masked.nc"
+    f"{config.MODELS_DIR}/tas_MPI-CSC-REMO2009_MPI-M-MPI-ESM-LR_rcp85_1971-2099/tas_r01_coarse_masked.nc",
+    f"{config.MODELS_DIR}/precip_MPI-CSC-REMO2009_MPI-M-MPI-ESM-LR_rcp85_1971-2099/precip_r01_coarse_masked.nc"
 ]
 
 obs_paths = [
     f"{config.DATASETS_TRAINING_DIR}/TabsD_step2_coarse.nc",
     f"{config.DATASETS_TRAINING_DIR}/RhiresD_step2_coarse.nc",
-    f"{config.DATASETS_TRAINING_DIR}/TminD_step2_coarse.nc",
-    f"{config.DATASETS_TRAINING_DIR}/TmaxD_step2_coarse.nc"
 ]
 
 
@@ -39,10 +51,6 @@ print(f"Data shape: {ntime} time steps, {nN}x{nE} grid cells, {nvars} variables"
 
 model_times = model_datasets[0]['time'].values
 obs_times = obs_datasets[0]['time'].values
-
-
-
-
 
 
 
@@ -95,7 +103,6 @@ def process_cell(i, j):
         full_mod_stack[:, precip_idx] = np.clip(full_mod_stack[:, precip_idx], 0, None)
 
     full_corrected_stack = np.full_like(full_mod_stack, np.nan)
-
 
 
 
@@ -169,6 +176,7 @@ results = Parallel(n_jobs=8)(
 
 
 print("Recon")
+
 corrected_data = {var: np.full((ntime, nN, nE), np.nan, dtype=np.float32) for var in var_names}
 
 idx = 0
@@ -200,7 +208,6 @@ for v, var_name in enumerate(var_names):
     out_ds.to_netcdf(output_path)
     print(f"Bias-corrected {var_name} saved to {output_path}")
     
-    # Close the dataset to free memory
     original_model_ds.close()
 
 print("diagnostics of valid points")
@@ -210,3 +217,4 @@ for var in var_names:
     percentage = 100 * non_nan_count / total_count
     print(f"{var}: {non_nan_count}/{total_count} non-NaN values ({percentage:.1f}%)")
 
+print("Done.")
