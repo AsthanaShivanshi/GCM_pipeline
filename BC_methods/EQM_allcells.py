@@ -1,6 +1,8 @@
-import xarray as xr
+import importlib.util
+spec = importlib.util.spec_from_file_location("config", "/work/FAC/FGSE/IDYST/tbeucler/downscaling/sasthana/Downscaling/GCM_pipeline/EUROCORDEX_11_RCP8.5/config.py")
+config = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(config)
 import numpy as np
-import config
 from SBCK import QM
 from joblib import Parallel, delayed
 from scipy.interpolate import interp1d
@@ -13,6 +15,7 @@ def eqm_cell(model_cell, obs_cell, calib_start, calib_end, model_times, obs_time
 
     model_dates = np.array(model_times, dtype='datetime64[D]')
     obs_dates = np.array(obs_times, dtype='datetime64[D]')
+
 
     calib_dates = np.arange(calib_start, calib_end + np.timedelta64(1, 'D'), dtype='datetime64[D]')
     model_calib_idx = np.in1d(model_dates, calib_dates)
