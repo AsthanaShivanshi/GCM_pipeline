@@ -9,4 +9,5 @@ MODEL_RUNS_EUROCORDEX_11_RCP45= os.environ.get("MODEL_RUNS_EUROCORDEX_11_RCP45",
 MODEL_RUNS_EUROCORDEX_11_RCP26= os.environ.get("MODEL_RUNS_EUROCORDEX_11_RCP26", f"{BASE_DIR}/sasthana/Downscaling/GCM_pipeline/EUROCORDEX_11_RCP2.6")
 OUTPUTS_MODELS_DIR= os.environ.get("OUTPUTS_MODELS_DIR", f"{BASE_DIR}/sasthana/Downscaling/Downscaling_Models/Outputs")
 BC_SCRIPTS= os.environ.get("BC_SCRIPTS", f"{BASE_DIR}/sasthana/Downscaling/GCM_pipeline/BC_methods")
+BIAS_CORRECTED_DIR= os.environ.get("BIAS_CORRECTED_DIR", f"{BASE_DIR}/sasthana/Downscaling/GCM_pipeline/EUROCORDEX_11_RCP4.5_BC")
 SCRATCH_DIR= os.environ.get("SCRATCH_DIR", f"/scratch/sasthana")

@@ -30,3 +30,6 @@ __pycache__/
 .venv/
 env/
 ./checkpoints/
+EUROCORDEX_11_RCP2.6/config.py
+EUROCORDEX_11_RCP8.5/config.py
+EUROCORDEX_11_RCP4.5/config.py
