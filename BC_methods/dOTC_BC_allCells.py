@@ -1,220 +1,206 @@
 import importlib.util
 spec = importlib.util.spec_from_file_location("config", "/work/FAC/FGSE/IDYST/tbeucler/downscaling/sasthana/Downscaling/GCM_pipeline/EUROCORDEX_11_RCP8.5/config.py")
-#problems with config impirt ,, had to use absolute path . 
-
 config = importlib.util.module_from_spec(spec)
-import glob
-import os
-from tqdm import tqdm
-
 spec.loader.exec_module(config)
 
-import xarray as xr
+import glob
+import os
 
+
+from tqdm import tqdm
+
+
+import xarray as xr
 import numpy as np
 
 from joblib import Parallel, delayed
-
-from scipy.interpolate import interp1d
-
 from SBCK import dOTC
-from joblib import Parallel, delayed
 
 import warnings  
 warnings.filterwarnings("ignore", category=DeprecationWarning) 
 
-var_names = ["tas", "precip"]
-obs_var_names = ["TabsD", "RhiresD"]
-
-
-
-model_paths = [
-    f"{config.MODELS_DIR}/tas_MPI-CSC-REMO2009_MPI-M-MPI-ESM-LR_rcp85_1971-2099/tas_r01_coarse_masked.nc",
-    f"{config.MODELS_DIR}/precip_MPI-CSC-REMO2009_MPI-M-MPI-ESM-LR_rcp85_1971-2099/precip_r01_coarse_masked.nc"
-]
-
-obs_paths = [
-    f"{config.DATASETS_TRAINING_DIR}/TabsD_step2_coarse.nc",
-    f"{config.DATASETS_TRAINING_DIR}/RhiresD_step2_coarse.nc",
-]
-
-
-model_datasets = [xr.open_dataset(p)[vn] for p, vn in zip(model_paths, var_names)]
-obs_datasets = [xr.open_dataset(p)[ovn] for p, ovn in zip(obs_paths, obs_var_names)]
-
-
-
-
-ntime, nN, nE = model_datasets[0].shape
-nvars = len(var_names)
-print(f"Data shape: {ntime} time steps, {nN}x{nE} grid cells, {nvars} variables")
-
-model_times = model_datasets[0]['time'].values
-obs_times = obs_datasets[0]['time'].values
-
-
-
-
-
 def get_doy(d): 
     return (np.datetime64(d, 'D') - np.datetime64(str(d)[:4] + '-01-01', 'D')).astype(int) + 1
 
-model_doys = np.array([get_doy(d) for d in model_times])
-
-
-
-
-calib_start = np.datetime64("1981-01-01")
-calib_end = np.datetime64("2010-12-31")
-
-
-
-
-
-def process_cell(i, j):
-    full_mod_cells = [ds[:, i, j].values for ds in model_datasets]  # Full period
-    full_mod_stack = np.stack(full_mod_cells, axis=1)
-    full_times = model_times
-    full_doys = np.array([get_doy(d) for d in full_times])
+def process_bivariate_dotc(tas_path, precip_path, obs_tas_path, obs_precip_path, out_tas_path, out_precip_path):
     
-    nan_fraction = np.isnan(full_mod_stack).sum() / full_mod_stack.size
-    if nan_fraction > 0.5:
-        return np.full_like(full_mod_stack, np.nan)
-    
-    calib_model_mask = (np.array(model_times, dtype='datetime64[D]') >= calib_start) & \
-                       (np.array(model_times, dtype='datetime64[D]') <= calib_end)
-    calib_obs_mask = (np.array(obs_times, dtype='datetime64[D]') >= calib_start) & \
-                     (np.array(obs_times, dtype='datetime64[D]') <= calib_end)
-    
-    calib_mod_cells = [ds[:, i, j].values[calib_model_mask] for ds in model_datasets]
-    calib_obs_cells = [ds[:, i, j].values[calib_obs_mask] for ds in obs_datasets]
-    
-    calib_mod_stack = np.stack(calib_mod_cells, axis=1)
-    calib_obs_stack = np.stack(calib_obs_cells, axis=1)
-    calib_doys = full_doys[calib_model_mask]
+    var_names = ["tas", "precip"]
+    obs_var_names = ["TabsD", "RhiresD"]
 
+    model_paths = [tas_path, precip_path]
+    obs_paths = [obs_tas_path, obs_precip_path]
 
+    model_datasets = [xr.open_dataset(p)[vn] for p, vn in zip(model_paths, var_names)]
+    obs_datasets = [xr.open_dataset(p)[ovn] for p, ovn in zip(obs_paths, obs_var_names)]
 
+    ntime, nN, nE = model_datasets[0].shape
 
-    if "precip" in var_names:
-        precip_idx = var_names.index("precip")
-        calib_obs_stack[:, precip_idx] = np.clip(calib_obs_stack[:, precip_idx], 0, None)
-        calib_mod_stack[:, precip_idx] = np.clip(calib_mod_stack[:, precip_idx], 0, None)
-        full_mod_stack[:, precip_idx] = np.clip(full_mod_stack[:, precip_idx], 0, None)
+    model_times = model_datasets[0]['time'].values
+    obs_times = obs_datasets[0]['time'].values
 
-    full_corrected_stack = np.full_like(full_mod_stack, np.nan)
+    def process_cell(i, j):
 
-
-
-    for doy in range(1, 367):
-        window_diffs = (calib_doys - doy + 366) % 366
-        window_mask = (window_diffs <= 45) | (window_diffs >= (366 - 45))
-        calib_mod_win = calib_mod_stack[window_mask]
-        calib_obs_win = calib_obs_stack[window_mask]
+        full_mod_cells = [ds[:, i, j].values for ds in model_datasets]  # Full period
+        full_mod_stack = np.stack(full_mod_cells, axis=1)
+        full_times = model_times
+        full_doys = np.array([get_doy(d) for d in full_times])
         
-        full_mask = (full_doys == doy)
-        full_mod_win_for_pred = full_mod_stack[full_mask]
+        nan_fraction = np.isnan(full_mod_stack).sum() / full_mod_stack.size
 
-        if (calib_mod_win.shape[0] == 0 or calib_obs_win.shape[0] == 0 or 
-            full_mod_win_for_pred.shape[0] == 0):
-            continue
+        if nan_fraction > 0.5:
+            return np.full_like(full_mod_stack, np.nan)
+        
+        calib_start = np.datetime64("1981-01-01")
+        calib_end = np.datetime64("2010-12-31")
 
-        valid_calib_mask = ~(np.isnan(calib_mod_win).any(axis=1) | np.isnan(calib_obs_win).any(axis=1))
-        valid_pred_mask = ~np.isnan(full_mod_win_for_pred).any(axis=1)
+        calib_model_mask = (np.array(model_times, dtype='datetime64[D]') >= calib_start) & \
+                           (np.array(model_times, dtype='datetime64[D]') <= calib_end)
+        calib_obs_mask = (np.array(obs_times, dtype='datetime64[D]') >= calib_start) & \
+                         (np.array(obs_times, dtype='datetime64[D]') <= calib_end)
         
-        calib_mod_win_clean = calib_mod_win[valid_calib_mask]
-        calib_obs_win_clean = calib_obs_win[valid_calib_mask]
-        full_mod_win_clean = full_mod_win_for_pred[valid_pred_mask]
+
+
+        calib_mod_cells = [ds[:, i, j].values[calib_model_mask] for ds in model_datasets]
+        calib_obs_cells = [ds[:, i, j].values[calib_obs_mask] for ds in obs_datasets]
         
-        if (calib_mod_win_clean.shape[0] < 10 or 
-            full_mod_win_clean.shape[0] == 0):
-            continue
+
+
+        calib_mod_stack = np.stack(calib_mod_cells, axis=1)
+        calib_obs_stack = np.stack(calib_obs_cells, axis=1)
+        calib_doys = full_doys[calib_model_mask]
+
+        full_corrected_stack = np.full_like(full_mod_stack, np.nan)
+
+        for doy in range(1, 367):
+            window_diffs = (calib_doys - doy + 366) % 366
+            window_mask = (window_diffs <= 45) | (window_diffs >= (366 - 45))
+            calib_mod_win = calib_mod_stack[window_mask]
+            calib_obs_win = calib_obs_stack[window_mask]
             
-        if (np.all(calib_mod_win_clean == calib_mod_win_clean[0], axis=0).any() or 
-            np.all(calib_obs_win_clean == calib_obs_win_clean[0], axis=0).any()):
-            mean_diff = np.nanmean(calib_obs_win_clean, axis=0) - np.nanmean(calib_mod_win_clean, axis=0)
-            corrected_full = full_mod_win_clean + mean_diff
-        else:
-            try:
-                # dOTC.fit(Y0, X0, X1):
-                # Y0 = ref obs
-                # X0 = biased calib model
-                # X1 = biased full series model
-                dotc = dOTC(bin_width=None, bin_origin=None)
-                dotc.fit(calib_obs_win_clean, calib_mod_win_clean, full_mod_win_clean)
-                corrected_full = dotc.predict(full_mod_win_clean)
+            full_mask = (full_doys == doy)
+            full_mod_win_for_pred = full_mod_stack[full_mask]
+
+            if (calib_mod_win.shape[0] == 0 or calib_obs_win.shape[0] == 0 or 
+                full_mod_win_for_pred.shape[0] == 0):
+                continue
+
+            valid_calib_mask = ~(np.isnan(calib_mod_win).any(axis=1) | np.isnan(calib_obs_win).any(axis=1))
+            valid_pred_mask = ~np.isnan(full_mod_win_for_pred).any(axis=1)
+            
+            calib_mod_win_clean = calib_mod_win[valid_calib_mask]
+            calib_obs_win_clean = calib_obs_win[valid_calib_mask]
+            full_mod_win_clean = full_mod_win_for_pred[valid_pred_mask]
+            
+            if (calib_mod_win_clean.shape[0] < 10 or 
+                full_mod_win_clean.shape[0] == 0):
+                continue
                 
-                # Validate output
-                if (corrected_full is None or np.all(np.isnan(corrected_full)) or 
-                    corrected_full.shape != full_mod_win_clean.shape):
-                    raise ValueError("dOTC produced invalid OP")
-                    
-            except (ValueError, RuntimeError, np.linalg.LinAlgError) as e:
+            if (np.all(calib_mod_win_clean == calib_mod_win_clean[0], axis=0).any() or 
+                np.all(calib_obs_win_clean == calib_obs_win_clean[0], axis=0).any()):
                 mean_diff = np.nanmean(calib_obs_win_clean, axis=0) - np.nanmean(calib_mod_win_clean, axis=0)
                 corrected_full = full_mod_win_clean + mean_diff
-
-        if "precip" in var_names:  #Debug step
-            precip_idx = var_names.index("precip")
-            corrected_full[:, precip_idx] = np.clip(corrected_full[:, precip_idx], 0, None)
-
-        full_indices = np.where(full_mask)[0]
-        valid_indices = full_indices[valid_pred_mask]
-        
-        for k, idx in enumerate(valid_indices):
-            full_corrected_stack[idx, :] = corrected_full[k, :]
-
-    return full_corrected_stack
-
-print("initiating bc dotc")
+            else:
+                try:
+                    dotc = dOTC(bin_width=None, bin_origin=None)
+                    dotc.fit(calib_obs_win_clean, calib_mod_win_clean, full_mod_win_clean)
+                    corrected_full = dotc.predict(full_mod_win_clean)
+                    if (corrected_full is None or np.all(np.isnan(corrected_full)) or 
+                        corrected_full.shape != full_mod_win_clean.shape):
 
 
-cell_pairs = [(i, j) for i in range(nN) for j in range(nE)]
-results = Parallel(n_jobs=8)(
-    delayed(process_cell)(i, j)
-    for i, j in tqdm(cell_pairs, desc="Processing cells")
-)
+                        raise ValueError("dOTC produced invalid OP")
 
 
-print("Recon")
+                except (ValueError, RuntimeError, np.linalg.LinAlgError):
+                    mean_diff = np.nanmean(calib_obs_win_clean, axis=0) - np.nanmean(calib_mod_win_clean, axis=0)
+                    corrected_full = full_mod_win_clean + mean_diff
 
-corrected_data = {var: np.full((ntime, nN, nE), np.nan, dtype=np.float32) for var in var_names}
+            full_indices = np.where(full_mask)[0]
+            valid_indices = full_indices[valid_pred_mask]
+            
+            for k, idx in enumerate(valid_indices):
+                full_corrected_stack[idx, :] = corrected_full[k, :]
 
-idx = 0
-for i in range(nN):
-    for j in range(nE):
-        cell_result = results[idx]
-        if cell_result is not None and not np.all(np.isnan(cell_result)):
-            for v, var in enumerate(var_names):
-                corrected_data[var][:, i, j] = cell_result[:, v]
-        idx += 1
+        return full_corrected_stack
 
+    print(f"Processing bivariate dOTC for:\n  {tas_path}\n  {precip_path}")
+    cell_pairs = [(i, j) for i in range(model_datasets[0].shape[1]) for j in range(model_datasets[0].shape[2])]
+    results = Parallel(n_jobs=8)(
+        delayed(process_cell)(i, j)
+        for i, j in tqdm(cell_pairs, desc="Processing cells")
+    )
 
+    corrected_data = {var: np.full(model_datasets[0].shape, np.nan, dtype=np.float32) for var in var_names}
 
-for v, var_name in enumerate(var_names):
-    original_model_ds = xr.open_dataset(model_paths[v])
-    
+    idx = 0
+
+    for i in range(model_datasets[0].shape[1]):
+        for j in range(model_datasets[0].shape[2]):
+            cell_result = results[idx]
+            if cell_result is not None and not np.all(np.isnan(cell_result)):
+                for v, var in enumerate(var_names):
+                    corrected_data[var][:, i, j] = cell_result[:, v]
+            idx += 1
+
+    original_model_ds = xr.open_dataset(tas_path)
     out_ds = original_model_ds.copy()
-    out_ds[var_name] = (("time", "N", "E"), corrected_data[var_name])
-    
-    output_path = f"{config.BIAS_CORRECTED_DIR}/dOTC/{var_name}_dOTC_BC_MPI-CSC-REMO2009_MPI-M-MPI-ESM-LR_rcp85_1971-2099_r01.nc"
-    
-    if 'lat' not in out_ds:
-        out_ds['lat'] = (('N', 'E'), original_model_ds['lat'].values)
-    if 'lon' not in out_ds:
-        out_ds['lon'] = (('N', 'E'), original_model_ds['lon'].values)
-
-    out_ds = out_ds.set_coords(['lat', 'lon'])
-
-    out_ds.to_netcdf(output_path)
-    print(f"Bias-corrected {var_name} saved to {output_path}")
-    
+    out_ds["tas"] = (("time", "N", "E"), corrected_data["tas"])
+    os.makedirs(os.path.dirname(out_tas_path), exist_ok=True)
+    out_ds.to_netcdf(out_tas_path)
     original_model_ds.close()
 
-print("diagnostics of valid points")
-for var in var_names:
-    non_nan_count = np.sum(~np.isnan(corrected_data[var]))
-    total_count = corrected_data[var].size
-    percentage = 100 * non_nan_count / total_count
-    print(f"{var}: {non_nan_count}/{total_count} non-NaN values ({percentage:.1f}%)")
 
-print("Done.")
+
+    original_model_ds = xr.open_dataset(precip_path)
+    out_ds = original_model_ds.copy()
+    out_ds["pr"] = (("time", "N", "E"), corrected_data["pr"])
+    os.makedirs(os.path.dirname(out_precip_path), exist_ok=True)
+    out_ds.to_netcdf(out_precip_path)
+    original_model_ds.close()
+
+def main():
+    print("dOTC for chains started")
+
+    tas_dir = f"{config.MODELS_RUNS_EUROCORDEX_11_RCP85}/tas_Swiss"
+    precip_dir = f"{config.MODELS_RUNS_EUROCORDEX_11_RCP85}/pr_Swiss"
+    obs_tas_path = f"{config.DATASETS_TRAINING_DIR}/TabsD_step2_coarse.nc"
+    obs_precip_path = f"{config.DATASETS_TRAINING_DIR}/RhiresD_step2_coarse.nc"
+    bc_dir = f"{config.BIAS_CORRECTED_DIR}/dOTC"
+
+    tas_files = sorted(glob.glob(f"{tas_dir}/**/*.nc", recursive=True))
+    
+    precip_files = sorted(glob.glob(f"{precip_dir}/**/*.nc", recursive=True))
+
+
+    def get_id(path, var_prefix):
+        # tas_day_EUR-11_MODELCHAIN.nc -> EUR-11_MODELCHAIN.nc ---> ID matching for bivcorrection
+
+        fname = os.path.basename(path)
+
+        return fname.replace(f"{var_prefix}_day_", "")
+
+    precip_dict = {get_id(f, "pr"): f for f in precip_files}
+
+    for tas_path in tqdm(tas_files, desc="Processing model chains"):
+
+        tas_id = get_id(tas_path, "tas")
+
+        pr_path = precip_dict.get(tas_id, None)
+        if pr_path is None:
+
+            print(f"Warning: No matching precip file for {tas_path}, skipping.")
+            continue
+
+        rel_path = os.path.relpath(tas_path, tas_dir)
+        out_tas_path = os.path.join(bc_dir, "tas", rel_path)
+        out_pr_path = os.path.join(bc_dir, "pr", os.path.relpath(pr_path, precip_dir))
+
+        process_bivariate_dotc(
+            tas_path, pr_path, obs_tas_path, obs_precip_path,
+            out_tas_path, out_pr_path
+        )
+
+    print("dOTC for all model chains finished")
+
+if __name__ == "__main__":
+    main()
