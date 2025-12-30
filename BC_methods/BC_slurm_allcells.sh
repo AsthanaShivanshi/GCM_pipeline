@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --job-name=dOTC_BC_AllCells
-#SBATCH --output=logs/bc/dOTC_BC_AllCells_output-%j.txt
-#SBATCH --error=logs/bc/dOTC_BC_AllCells_job_error-%j.txt
+#SBATCH --job-name=CDFt_BC_AllCells
+#SBATCH --output=logs/bc/CDFt_BC_AllCells_output-%j.txt
+#SBATCH --error=logs/bc/CDFt_BC_AllCells_job_error-%j.txt
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --time=3-00:00:00
@@ -21,10 +21,14 @@ cd BC_methods
 #python EQM_allcells.py --n_jobs $SLURM_CPUS_PER_TASK
 
 
-echo "dOTC for all Cells started"
-python dOTC_BC_AllCells.py --n_jobs $SLURM_CPUS_PER_TASK
-echo "dOTC for all Cells finished"
+#echo "dOTC for all Cells started"
+#python dOTC_BC_AllCells.py --n_jobs $SLURM_CPUS_PER_TASK
+#echo "dOTC for all Cells finished"
 
 #echo "QDM for all Cells started"
 #python QDM_BC_AllCells.py --n_jobs $SLURM_CPUS_PER_TASK
 #echo "QDM for all Cells finished"
+
+echo "CDF-t for all Cells started"
+python CDFt_BC_allcells.py --n_jobs $SLURM_CPUS_PER_TASK
+echo "CDF-t for all Cells finished"

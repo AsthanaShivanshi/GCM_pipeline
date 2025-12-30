@@ -46,7 +46,8 @@ def cdft_cell(model_cell, obs_cell, model_times, obs_times, var_name):
     calib_mod_data = model_cell[model_calib_idx]
     calib_obs_data = obs_cell[obs_calib_idx]
     
-    # No clipping for precip with CDF-t
+
+
 
     def get_doy(dates):
         return np.array([(np.datetime64(d, 'D') - np.datetime64(str(d)[:4] + '-01-01', 'D')).astype(int) + 1 
@@ -86,7 +87,6 @@ def cdft_cell(model_cell, obs_cell, model_times, obs_times, var_name):
                  valid_full_data.reshape(-1, 1))
         corrected_full = cdft.predict(valid_full_data.reshape(-1, 1)).flatten()
         
-        # No clipping for precip with CDF-t
         
         full_indices = np.where(full_mask)[0]
         valid_indices = full_indices[valid_full_mask]
