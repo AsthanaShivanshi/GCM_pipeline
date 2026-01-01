@@ -1,5 +1,5 @@
 import importlib.util
-spec = importlib.util.spec_from_file_location("config", "/work/FAC/FGSE/IDYST/tbeucler/downscaling/sasthana/Downscaling/GCM_pipeline/EUROCORDEX_11_RCP8.5/config.py")
+spec = importlib.util.spec_from_file_location("config", "/work/FAC/FGSE/IDYST/tbeucler/downscaling/sasthana/Downscaling/GCM_pipeline/EUROCORDEX_11_RCP2.6/config.py")
 #problems with config impirt ,, had to use absolute path . 
 
 config = importlib.util.module_from_spec(spec)
@@ -36,7 +36,7 @@ def filter_valid_dates(ds, varname):
 
 
 
-def cdft_cell(model_cell, obs_cell, model_times, obs_times):
+def cdft_cell(model_cell, obs_cell, model_times, obs_times, varname):
 
     ntime = model_cell.shape[0]
     corrected_series = np.full(ntime, np.nan, dtype=np.float32)
@@ -116,21 +116,19 @@ def cdft_cell(model_cell, obs_cell, model_times, obs_times):
 
 
 def main():
-    print("CDF-t (tasmax) started")
+    print("CDF-t (tasmin) started")
 
-    tas_dir = f"{config.MODELS_RUNS_EUROCORDEX_11_RCP85}/tasmax_Swiss/"
-    obs_path = f"{config.DATASETS_TRAINING_DIR}/TmaxD_step2_coarse.nc"
+    tas_dir = f"{config.MODELS_RUNS_EUROCORDEX_11_RCP26}/tasmin_Swiss/"
+    obs_path = f"{config.DATASETS_TRAINING_DIR}/TminD_step2_coarse.nc"
     bias_corrected_dir = f"{config.BIAS_CORRECTED_DIR}/CDFT/"
     obs_ds = xr.open_dataset(obs_path)
-    obs = obs_ds["TmaxD"]
-
+    obs = obs_ds["TminD"]
     tas_files = glob.glob(f"{tas_dir}/**/*.nc", recursive=True)
-
-    for model_path in tqdm(tas_files, desc="Processing CDF-t tasmax"):
+    for model_path in tqdm(tas_files, desc="Processing CDF-t tasmin"):
         print(f"Processing {model_path}")
         model_ds = xr.open_dataset(model_path, decode_times=True, use_cftime=True)
-        model_ds = filter_valid_dates(model_ds, "tasmax")
-        model = model_ds["tasmax"]
+        model_ds = filter_valid_dates(model_ds, "tasmin")
+        model = model_ds["tasmin"]
         ntime, nN, nE = model.shape
         qdm_data = np.full(model.shape, np.nan, dtype=np.float32)
 
@@ -139,7 +137,7 @@ def main():
             obs_cell = obs[:, i, j].values
             return cdft_cell(
                 model_cell, obs_cell,
-                model['time'].values, obs['time'].values, "tasmax" 
+                model['time'].values, obs['time'].values, "tasmin" 
             )
 
         results = Parallel(n_jobs=8)(
@@ -154,14 +152,14 @@ def main():
                 idx += 1
 
         out_ds = model_ds.copy()
-        out_ds["tasmax"] = (("time", "N", "E"), qdm_data)
+        out_ds["tasmin"] = (("time", "N", "E"), qdm_data)
 
         rel_path = os.path.relpath(model_path, tas_dir)
         output_path = os.path.join(bias_corrected_dir, rel_path)
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         out_ds.to_netcdf(output_path)
 
-    print("CDF-t (tasmax) finished")
+    print("CDF-t (tasmin) for RCP2.6 finished")
 
 if __name__ == "__main__":
     main()
