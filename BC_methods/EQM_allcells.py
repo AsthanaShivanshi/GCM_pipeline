@@ -34,15 +34,14 @@ def eqm_cell(model_cell, obs_cell, calib_start, calib_end, model_times, obs_time
     calib_dates = np.arange(calib_start, calib_end + np.timedelta64(1, 'D'), dtype='datetime64[D]')
     
     
-    model_calib_idx = np.in1d(model_dates, calib_dates)
-    obs_calib_idx = np.in1d(obs_dates, calib_dates)
-
+    model_calib_idx = np.isin(model_dates, calib_dates)
+    obs_calib_idx = np.isin(obs_dates, calib_dates)
     common_dates = np.intersect1d(model_dates[model_calib_idx], obs_dates[obs_calib_idx])
     if len(common_dates) == 0:
         return qm_series
 
-    model_common_idx = np.in1d(model_dates, common_dates)
-    obs_common_idx = np.in1d(obs_dates, common_dates)
+    model_common_idx = np.isin(model_dates, common_dates)
+    obs_common_idx = np.isin(obs_dates, common_dates)
 
     calib_mod_cell = model_cell[model_common_idx]
     calib_obs_cell = obs_cell[obs_common_idx]
@@ -104,54 +103,84 @@ def eqm_cell(model_cell, obs_cell, calib_start, calib_end, model_times, obs_time
     return qm_series
 
 def main():
-    print("EQM all cells all files for tas started")
+    print("EQM all cells all files started")
 
-    tas_dir = f"{config.MODELS_RUNS_EUROCORDEX_11_RCP85}/tas_Swiss"
+    tas_dir = f"{config.MODELS_RUNS_EUROCORDEX_11_RCP85}/tas_Swiss/"
     obs_path = f"{config.DATASETS_TRAINING_DIR}/TabsD_step2_coarse.nc"
     bias_corrected_dir = f"{config.BIAS_CORRECTED_DIR}/EQM"
 
     obs_ds = xr.open_dataset(obs_path)
     obs = obs_ds["TabsD"]
 
-    tas_files = glob.glob(f"{tas_dir}/**/*.nc") #ending in :nc
+    tas_files = glob.glob(f"{tas_dir}/**/*.nc", recursive=True)
 
+    print(f"Found {len(tas_files)} files in {tas_dir}")
 
     for model_path in tqdm(tas_files, desc="Processing individual files"):
         print(f"Processing {model_path}")
-        model_ds = xr.open_dataset(model_path)
-        model = model_ds["tas"]
+        try:
+            # Fix the deprecation warning
+            from xr.coders import CFDatetimeCoder
+            time_coder = CFDatetimeCoder(use_cftime=True)
+            model_ds = xr.open_dataset(model_path, decode_times=time_coder)
+            model = model_ds["tas"]
 
-        ntime, nN, nE = model.shape
-        qm_data = np.full(model.shape, np.nan, dtype=np.float32)
+            # Filter out invalid dates
+            time_values = []
+            valid_indices = []
+            for idx, t in enumerate(model['time'].values):
+                try:
+                    np.datetime64(f"{t.year:04d}-{t.month:02d}-{t.day:02d}")
+                    time_values.append(np.datetime64(f"{t.year:04d}-{t.month:02d}-{t.day:02d}"))
+                    valid_indices.append(idx)
+                except ValueError:
+                    continue  
 
-        def process_cell(i, j):
-            model_cell = model[:, i, j].values
-            obs_cell = obs[:, i, j].values
-            return eqm_cell(
-                model_cell, obs_cell,
-                np.datetime64("1981-01-01"), np.datetime64("2010-12-31"), #Cal period
-                model['time'].values, obs['time'].values
+            # Filter the entire dataset along the time dimension, not just the model variable
+            model_ds_filtered = model_ds.isel(time=valid_indices)
+            model_ds_filtered['time'] = time_values
+            model = model_ds_filtered["tas"]
+
+            ntime, nN, nE = model.shape
+            qm_data = np.full((ntime, nN, nE), np.nan, dtype=np.float32)
+
+            def process_cell(i, j):
+                model_cell = model[:, i, j].values
+                obs_cell = obs[:, i, j].values
+                return eqm_cell(
+                    model_cell,
+                    obs_cell,
+                    np.datetime64("1981-01-01"),
+                    np.datetime64("2010-12-31"),
+                    model['time'].values,
+                    obs['time'].values
+                )
+
+            # Parallel processing over grid cells
+            results = Parallel(n_jobs=8)(
+                delayed(process_cell)(i, j)
+                for i in range(nN) for j in range(nE)
             )
 
-        results = Parallel(n_jobs=8)(
-            delayed(process_cell)(i, j)
-            for i in range(nN) for j in range(nE)
-        )
+            idx = 0
+            for i in range(nN):
+                for j in range(nE):
+                    qm_data[:, i, j] = results[idx]
+                    idx += 1
 
-        idx = 0
-        for i in range(nN):
-            for j in range(nE):
-                qm_data[:, i, j] = results[idx]
-                idx += 1
+            # Save output - use the filtered dataset as the base
+            out_ds = model_ds_filtered.copy()
+            out_ds["tas"] = (("time", "N", "E"), qm_data)
 
-        out_ds = model_ds.copy()
-        out_ds["tas"] = (("time", "N", "E"), qm_data)
+            rel_path = os.path.relpath(model_path, tas_dir)
+            output_path = os.path.join(bias_corrected_dir, rel_path)
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+            out_ds.to_netcdf(output_path)
+            print(f"BC EQM tas saved to {output_path}")
 
-        rel_path = os.path.relpath(model_path, tas_dir)
-        output_path = os.path.join(bias_corrected_dir, rel_path)
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
-        out_ds.to_netcdf(output_path)
-        print(f"Bias-corrected tas saved to {output_path}")
+        except Exception as e:
+            print(f"Error for file {model_path}: {e}")
+
 
 if __name__ == "__main__":
     main()
