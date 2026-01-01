@@ -96,7 +96,7 @@ def eqm_cell(model_cell, obs_cell, calib_start, calib_end, model_times, obs_time
             mod_q = np.quantile(mod_window, np.linspace(0, 1, 101))
             value_quantiles = np.searchsorted(mod_q, values, side='right') / 100.0
             value_quantiles = np.clip(value_quantiles, 0, 1)
-            # interpolated corr function
+            # interpolated corr fx
             corrected = values + interp_corr(value_quantiles)
             qm_series[indices] = corrected
 
@@ -105,12 +105,12 @@ def eqm_cell(model_cell, obs_cell, calib_start, calib_end, model_times, obs_time
 def main():
     print("EQM all cells all files started")
 
-    tas_dir = f"{config.MODELS_RUNS_EUROCORDEX_11_RCP85}/tas_Swiss/"
-    obs_path = f"{config.DATASETS_TRAINING_DIR}/TabsD_step2_coarse.nc"
+    tas_dir = f"{config.MODELS_RUNS_EUROCORDEX_11_RCP85}/tasmin_Swiss/"
+    obs_path = f"{config.DATASETS_TRAINING_DIR}/TminD_step2_coarse.nc"
     bias_corrected_dir = f"{config.BIAS_CORRECTED_DIR}/EQM"
 
     obs_ds = xr.open_dataset(obs_path)
-    obs = obs_ds["TabsD"]
+    obs = obs_ds["TminD"]
 
     tas_files = glob.glob(f"{tas_dir}/**/*.nc", recursive=True)
 
@@ -119,11 +119,11 @@ def main():
     for model_path in tqdm(tas_files, desc="Processing individual files"):
         print(f"Processing {model_path}")
         try:
-            # Fix the deprecation warning
-            from xr.coders import CFDatetimeCoder
-            time_coder = CFDatetimeCoder(use_cftime=True)
-            model_ds = xr.open_dataset(model_path, decode_times=time_coder)
-            model = model_ds["tas"]
+#Deprecation warning : tried to fix,,, but version not available. Safely ignored. 
+# 
+#             
+            model_ds = xr.open_dataset(model_path, decode_times=True, use_cftime=True)
+            model = model_ds["tasmin"]
 
             # Filter out invalid dates
             time_values = []
@@ -139,7 +139,7 @@ def main():
             # Filter the entire dataset along the time dimension, not just the model variable
             model_ds_filtered = model_ds.isel(time=valid_indices)
             model_ds_filtered['time'] = time_values
-            model = model_ds_filtered["tas"]
+            model = model_ds_filtered["tasmin"]
 
             ntime, nN, nE = model.shape
             qm_data = np.full((ntime, nN, nE), np.nan, dtype=np.float32)
@@ -170,13 +170,13 @@ def main():
 
             # Save output - use the filtered dataset as the base
             out_ds = model_ds_filtered.copy()
-            out_ds["tas"] = (("time", "N", "E"), qm_data)
+            out_ds["tasmin"] = (("time", "N", "E"), qm_data)
 
             rel_path = os.path.relpath(model_path, tas_dir)
             output_path = os.path.join(bias_corrected_dir, rel_path)
             os.makedirs(os.path.dirname(output_path), exist_ok=True)
             out_ds.to_netcdf(output_path)
-            print(f"BC EQM tas saved to {output_path}")
+            print(f"BC EQM tasmin saved to {output_path}")
 
         except Exception as e:
             print(f"Error for file {model_path}: {e}")
