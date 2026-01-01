@@ -19,7 +19,24 @@ from joblib import Parallel, delayed
 
 from scipy.interpolate import interp1d
 
-def cdft_cell(model_cell, obs_cell, model_times, obs_times, var_name):
+
+def filter_valid_dates(ds, varname):
+    time_values = []
+    valid_indices = []
+    for idx, t in enumerate(ds['time'].values):
+        try:
+            np.datetime64(f"{t.year:04d}-{t.month:02d}-{t.day:02d}")
+            time_values.append(np.datetime64(f"{t.year:04d}-{t.month:02d}-{t.day:02d}"))
+            valid_indices.append(idx)
+        except ValueError:
+            continue  # Skipping invalid dates
+    ds_filtered = ds.isel(time=valid_indices)
+    ds_filtered['time'] = time_values
+    return ds_filtered
+
+
+
+def cdft_cell(model_cell, obs_cell, model_times, obs_times):
 
     ntime = model_cell.shape[0]
     corrected_series = np.full(ntime, np.nan, dtype=np.float32)
@@ -52,8 +69,12 @@ def cdft_cell(model_cell, obs_cell, model_times, obs_times, var_name):
     def get_doy(d): 
         return (np.datetime64(d, 'D') - np.datetime64(str(d)[:4] + '-01-01', 'D')).astype(int) + 1
         
+
+
     calib_doys = np.array([get_doy(d) for d in common_calib_dates])
     full_doys = np.array([get_doy(d) for d in model_dates])
+
+
 
     for doy in range(1, 367):
         window_diffs = (calib_doys - doy + 366) % 366
@@ -107,7 +128,8 @@ def main():
 
     for model_path in tqdm(tas_files, desc="Processing CDF-t tas"):
         print(f"Processing {model_path}")
-        model_ds = xr.open_dataset(model_path)
+        model_ds = xr.open_dataset(model_path, decode_times=True, use_cftime=True)
+        model_ds = filter_valid_dates(model_ds, "tas")
         model = model_ds["tas"]
 
         ntime, nN, nE = model.shape
