@@ -1,5 +1,5 @@
 import importlib.util
-spec = importlib.util.spec_from_file_location("config", "/work/FAC/FGSE/IDYST/tbeucler/downscaling/sasthana/Downscaling/GCM_pipeline/EUROCORDEX_11_RCP8.5/config.py")
+spec = importlib.util.spec_from_file_location("config", "/work/FAC/FGSE/IDYST/tbeucler/downscaling/sasthana/Downscaling/GCM_pipeline/EUROCORDEX_11_RCP2.6/config.py")
 #problems with config impirt ,, had to use absolute path . 
 
 config = importlib.util.module_from_spec(spec)
@@ -105,13 +105,12 @@ def eqm_cell(model_cell, obs_cell, calib_start, calib_end, model_times, obs_time
 def main():
     print("EQM all cells all files started")
 
-    tas_dir = f"{config.MODELS_RUNS_EUROCORDEX_11_RCP85}/tasmin_Swiss/"
-    obs_path = f"{config.DATASETS_TRAINING_DIR}/TminD_step2_coarse.nc"
+    tas_dir = f"{config.MODELS_RUNS_EUROCORDEX_11_RCP26}/tasmax_Swiss/"
+    obs_path = f"{config.DATASETS_TRAINING_DIR}/TmaxD_step2_coarse.nc"
     bias_corrected_dir = f"{config.BIAS_CORRECTED_DIR}/EQM"
 
     obs_ds = xr.open_dataset(obs_path)
-    obs = obs_ds["TminD"]
-
+    obs = obs_ds["TmaxD"] 
     tas_files = glob.glob(f"{tas_dir}/**/*.nc", recursive=True)
 
     print(f"Found {len(tas_files)} files in {tas_dir}")
@@ -123,7 +122,7 @@ def main():
 # 
 #             
             model_ds = xr.open_dataset(model_path, decode_times=True, use_cftime=True)
-            model = model_ds["tasmin"]
+            model = model_ds["tasmax"]
 
             # Filter out invalid dates
             time_values = []
@@ -139,7 +138,7 @@ def main():
             # Filter the entire dataset along the time dimension, not just the model variable
             model_ds_filtered = model_ds.isel(time=valid_indices)
             model_ds_filtered['time'] = time_values
-            model = model_ds_filtered["tasmin"]
+            model = model_ds_filtered["tasmax"]
 
             ntime, nN, nE = model.shape
             qm_data = np.full((ntime, nN, nE), np.nan, dtype=np.float32)
@@ -170,13 +169,13 @@ def main():
 
             # Save output - use the filtered dataset as the base
             out_ds = model_ds_filtered.copy()
-            out_ds["tasmin"] = (("time", "N", "E"), qm_data)
+            out_ds["tasmax"] = (("time", "N", "E"), qm_data)
 
             rel_path = os.path.relpath(model_path, tas_dir)
             output_path = os.path.join(bias_corrected_dir, rel_path)
             os.makedirs(os.path.dirname(output_path), exist_ok=True)
             out_ds.to_netcdf(output_path)
-            print(f"BC EQM tasmin saved to {output_path}")
+            print(f"BC EQM tasmax for RCP 2.6 saved to {output_path}")
 
         except Exception as e:
             print(f"Error for file {model_path}: {e}")

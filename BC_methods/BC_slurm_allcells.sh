@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --job-name=EQM_tasmin_BC_allcells
-#SBATCH --output=logs/bc/EQM/EQM_tasmin_BC_AllCells_output-%j.txt
-#SBATCH --error=logs/bc/EQM/EQM_tasmin_BC_AllCells_job_error-%j.txt
+#SBATCH --job-name=EQM_tasmax_RCP2.6_BC_allcells
+#SBATCH --output=logs/bc/EQM/EQM_tasmax_RCP2.6_BC_AllCells_output-%j.txt
+#SBATCH --error=logs/bc/EQM/EQM_tasmax_RCP2.6_BC_AllCells_job_error-%j.txt
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --time=3-00:00:00

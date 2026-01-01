@@ -11,6 +11,7 @@ from tqdm import tqdm
 
 
 import xarray as xr
+
 import numpy as np
 
 from joblib import Parallel, delayed
@@ -108,7 +109,7 @@ def process_bivariate_dotc(tas_path, precip_path, obs_tas_path, obs_precip_path,
                         corrected_full.shape != full_mod_win_clean.shape):
 
 
-                        raise ValueError("dOTC produced invalid OP")
+                        raise ValueError("invalid OP")
 
 
                 except (ValueError, RuntimeError, np.linalg.LinAlgError):
@@ -161,11 +162,11 @@ def process_bivariate_dotc(tas_path, precip_path, obs_tas_path, obs_precip_path,
 def main():
     print("dOTC for chains started")
 
-    tas_dir = f"{config.MODELS_RUNS_EUROCORDEX_11_RCP85}/tas_Swiss"
-    precip_dir = f"{config.MODELS_RUNS_EUROCORDEX_11_RCP85}/pr_Swiss"
+    tas_dir = f"{config.MODELS_RUNS_EUROCORDEX_11_RCP85}/tas_Swiss/"
+    precip_dir = f"{config.MODELS_RUNS_EUROCORDEX_11_RCP85}/pr_Swiss/"
     obs_tas_path = f"{config.DATASETS_TRAINING_DIR}/TabsD_step2_coarse.nc"
     obs_precip_path = f"{config.DATASETS_TRAINING_DIR}/RhiresD_step2_coarse.nc"
-    bc_dir = f"{config.BIAS_CORRECTED_DIR}/dOTC"
+    bc_dir = f"{config.BIAS_CORRECTED_DIR}/dOTC/"
 
     tas_files = sorted(glob.glob(f"{tas_dir}/**/*.nc", recursive=True))
     
