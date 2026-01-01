@@ -113,7 +113,7 @@ def main():
     obs_ds = xr.open_dataset(obs_path)
     obs = obs_ds["TabsD"]
 
-    tas_files = glob.glob(f"{tas_dir}/**/*.nc", recursive=True) #ending in :nc
+    tas_files = glob.glob(f"{tas_dir}/**/*.nc") #ending in :nc
 
 
     for model_path in tqdm(tas_files, desc="Processing individual files"):

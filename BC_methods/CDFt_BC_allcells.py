@@ -49,12 +49,11 @@ def cdft_cell(model_cell, obs_cell, model_times, obs_times, var_name):
 
 
 
-    def get_doy(dates):
-        return np.array([(np.datetime64(d, 'D') - np.datetime64(str(d)[:4] + '-01-01', 'D')).astype(int) + 1 
-                        for d in dates])
-    
-    calib_doys = get_doy(common_calib_dates)
-    full_doys = get_doy(model_dates)
+    def get_doy(d): 
+        return (np.datetime64(d, 'D') - np.datetime64(str(d)[:4] + '-01-01', 'D')).astype(int) + 1
+        
+    calib_doys = np.array([get_doy(d) for d in common_calib_dates])
+    full_doys = np.array([get_doy(d) for d in model_dates])
 
     for doy in range(1, 367):
         window_diffs = (calib_doys - doy + 366) % 366
