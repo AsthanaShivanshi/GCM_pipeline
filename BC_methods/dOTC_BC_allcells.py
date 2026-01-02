@@ -1,6 +1,6 @@
 import importlib.util
 
-spec = importlib.util.spec_from_file_location("config", "/work/FAC/FGSE/IDYST/tbeucler/downscaling/sasthana/Downscaling/GCM_pipeline/EUROCORDEX_11_RCP4.5/config.py")
+spec = importlib.util.spec_from_file_location("config", "/work/FAC/FGSE/IDYST/tbeucler/downscaling/sasthana/Downscaling/GCM_pipeline/EUROCORDEX_11_RCP2.6/config.py")
 config = importlib.util.module_from_spec(spec)
 
 spec.loader.exec_module(config)
@@ -174,7 +174,7 @@ def bivariate_dotc(tas_path, precip_path, obs_tas_path, obs_precip_path, out_tas
 
     out_ds = xr.open_dataset(precip_path, decode_times=True, use_cftime=True)
     out_ds = filter_valid_dates(out_ds)
-    out_ds["pr"] = (("time", "N", "E"), corrected_data["precip"])
+    out_ds["pr"] = (("time", "N", "E"), corrected_data["pr"])
     os.makedirs(os.path.dirname(out_precip_path), exist_ok=True)
     out_ds.to_netcdf(out_precip_path)
     out_ds.close()
@@ -183,10 +183,8 @@ def bivariate_dotc(tas_path, precip_path, obs_tas_path, obs_precip_path, out_tas
 
 def main():
 
-    print("dOTC started")
-
-    tas_dir = f"{config.MODELS_RUNS_EUROCORDEX_11_RCP45}/tas_Swiss/"
-    precip_dir = f"{config.MODELS_RUNS_EUROCORDEX_11_RCP45}/pr_Swiss/"
+    tas_dir = f"{config.MODELS_RUNS_EUROCORDEX_11_RCP26}/tas_Swiss/"
+    precip_dir = f"{config.MODELS_RUNS_EUROCORDEX_11_RCP26}/pr_Swiss/"
     obs_tas_path = f"{config.DATASETS_TRAINING_DIR}/TabsD_step2_coarse.nc"
     obs_precip_path = f"{config.DATASETS_TRAINING_DIR}/RhiresD_step2_coarse.nc"
     bc_dir = f"{config.BIAS_CORRECTED_DIR}/dOTC/"
@@ -228,7 +226,7 @@ def main():
         )
 
         
-    print("MC finished")
+    print("MC finished for bivariate temp and precip for RCP2.6")
 
 if __name__ == "__main__":
     main()
