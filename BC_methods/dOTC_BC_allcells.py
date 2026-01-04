@@ -22,7 +22,6 @@ def get_doy(d):
 
 
 
-
 def filter_valid_dates(ds):
     time_values = []
     valid_indices = []
@@ -80,17 +79,30 @@ def bivariate_dotc(tas_path, precip_path, obs_tas_path, obs_precip_path, out_tas
         calib_start = np.datetime64("1981-01-01")
         calib_end = np.datetime64("2010-12-31")
 
-        calib_model_mask = (np.array(model_times, dtype='datetime64[D]') >= calib_start) & \
-                           (np.array(model_times, dtype='datetime64[D]') <= calib_end)
-        calib_obs_mask = (np.array(obs_times, dtype='datetime64[D]') >= calib_start) & \
-                         (np.array(obs_times, dtype='datetime64[D]') <= calib_end)
+        # All times to datetime64 
+        model_times_np = np.array([np.datetime64(str(t)[:10]) for t in model_times])
+        obs_times_np = np.array([np.datetime64(str(t)[:10]) for t in obs_times])
+
+        calib_start = np.datetime64("1981-01-01")
+        calib_end = np.datetime64("2010-12-31")
+
+        model_times_calib = model_times_np[(model_times_np >= calib_start) & (model_times_np <= calib_end)]
+        obs_times_calib = obs_times_np[(obs_times_np >= calib_start) & (obs_times_np <= calib_end)]
+        calib_dates = np.intersect1d(model_times_calib, obs_times_calib)
+
+        calib_model_mask = np.isin(model_times_np, calib_dates)
+        calib_obs_mask = np.isin(obs_times_np, calib_dates)
+
+
+        calib_doys = np.array([get_doy(d) for d in calib_dates])  # calib_dates: intersection of model/obs dates in calibration period
+        full_doys = np.array([get_doy(d) for d in model_times_np])  # model_times_np: all model times
+
         calib_mod_cells = [ds[:, i, j].values[calib_model_mask] for ds in model_datasets]
         calib_obs_cells = [ds[:, i, j].values[calib_obs_mask] for ds in obs_datasets]
-
         calib_mod_stack = np.stack(calib_mod_cells, axis=1)
         calib_obs_stack = np.stack(calib_obs_cells, axis=1)
-        calib_doys = full_doys[calib_model_mask]
         full_corrected_stack = np.full_like(full_mod_stack, np.nan)
+
 
 
 
@@ -104,6 +116,8 @@ def bivariate_dotc(tas_path, precip_path, obs_tas_path, obs_precip_path, out_tas
             if (calib_mod_win.shape[0] == 0 or calib_obs_win.shape[0] == 0 or 
                 full_mod_win_for_pred.shape[0] == 0):
                 continue
+
+
 
             valid_calib_mask = ~(np.isnan(calib_mod_win).any(axis=1) | np.isnan(calib_obs_win).any(axis=1))
             valid_pred_mask = ~np.isnan(full_mod_win_for_pred).any(axis=1)
@@ -154,9 +168,7 @@ def bivariate_dotc(tas_path, precip_path, obs_tas_path, obs_precip_path, out_tas
     idx = 0
     
     
-    
-    
-    
+
     for i in range(model_datasets[0].shape[1]):
         for j in range(model_datasets[0].shape[2]):
             cell_result = results[idx]
