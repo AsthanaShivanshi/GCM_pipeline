@@ -195,6 +195,12 @@ def bivariate_dotc(tas_path, precip_path, obs_tas_path, obs_precip_path, out_tas
 
 def main():
 
+
+
+
+
+
+
     tas_dir = f"{config.MODELS_RUNS_EUROCORDEX_11_RCP85}/tas_Swiss/"
     precip_dir = f"{config.MODELS_RUNS_EUROCORDEX_11_RCP85}/pr_Swiss/"
     obs_tas_path = f"{config.DATASETS_TRAINING_DIR}/TabsD_step2_coarse.nc"
@@ -231,6 +237,11 @@ def main():
         out_tas_path = os.path.join(bc_dir, "tas", rel_path)
         out_pr_path = os.path.join(bc_dir, "pr", os.path.relpath(pr_path, precip_dir))
         
+#For multiple runs over >3 days, adding a check so it skips files already presemt xxxxxxxxxxxxxxx
+#on an average, corrects 2 model chains per day (including application of transfer fuznction to entire chainxxxxxxxxx)
+        if os.path.exists(out_tas_path) and os.path.exists(out_pr_path):
+            print(f"Skipping already processed files:\n  {out_tas_path}\n  {out_pr_path}")
+            continue
         
         bivariate_dotc(
             tas_path, pr_path, obs_tas_path, obs_precip_path,
