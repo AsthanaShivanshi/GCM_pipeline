@@ -1,6 +1,6 @@
 import importlib.util
 
-spec = importlib.util.spec_from_file_location("config", "/work/FAC/FGSE/IDYST/tbeucler/downscaling/sasthana/Downscaling/GCM_pipeline/EUROCORDEX_11_RCP4.5/config.py")
+spec = importlib.util.spec_from_file_location("config", "/work/FAC/FGSE/IDYST/tbeucler/downscaling/sasthana/Downscaling/GCM_pipeline/EUROCORDEX_11_RCP2.6/config.py")
 config = importlib.util.module_from_spec(spec)
 
 spec.loader.exec_module(config)
@@ -73,7 +73,7 @@ def bivariate_dotc(tas_path, precip_path, obs_tas_path, obs_precip_path, out_tas
 
 
 
-        if nan_fraction > 0.5:
+        if nan_fraction > 0.7:
             return np.full_like(full_mod_stack, np.nan)
 
         calib_start = np.datetime64("1981-01-01")
@@ -201,8 +201,8 @@ def main():
 
 
 
-    tas_dir = f"{config.MODELS_RUNS_EUROCORDEX_11_RCP45}/tas_Swiss/"
-    precip_dir = f"{config.MODELS_RUNS_EUROCORDEX_11_RCP45}/pr_Swiss/"
+    tas_dir = f"{config.MODELS_RUNS_EUROCORDEX_11_RCP26}/tas_Swiss/"
+    precip_dir = f"{config.MODELS_RUNS_EUROCORDEX_11_RCP26}/pr_Swiss/"
     obs_tas_path = f"{config.DATASETS_TRAINING_DIR}/TabsD_step2_coarse.nc"
     obs_precip_path = f"{config.DATASETS_TRAINING_DIR}/RhiresD_step2_coarse.nc"
     bc_dir = f"{config.BIAS_CORRECTED_DIR}/dOTC/"
@@ -248,7 +248,7 @@ def main():
             out_tas_path, out_pr_path
         )
 
-    print("MC finished for bivariate temp and precip for RCP4.5")
+    print("MC finished for bivariate temp and precip for RCP2.6")
 
 if __name__ == "__main__":
     main()
