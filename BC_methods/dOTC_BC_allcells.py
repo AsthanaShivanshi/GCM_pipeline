@@ -1,6 +1,6 @@
 import importlib.util
 
-spec = importlib.util.spec_from_file_location("config", "/work/FAC/FGSE/IDYST/tbeucler/downscaling/sasthana/Downscaling/GCM_pipeline/EUROCORDEX_11_RCP2.6/config.py")
+spec = importlib.util.spec_from_file_location("config", "/work/FAC/FGSE/IDYST/tbeucler/downscaling/sasthana/Downscaling/GCM_pipeline/EUROCORDEX_11_RCP8.5/config.py")
 config = importlib.util.module_from_spec(spec)
 
 spec.loader.exec_module(config)
@@ -201,8 +201,8 @@ def main():
 
 
 
-    tas_dir = f"{config.MODELS_RUNS_EUROCORDEX_11_RCP26}/tas_Swiss/"
-    precip_dir = f"{config.MODELS_RUNS_EUROCORDEX_11_RCP26}/pr_Swiss/"
+    tas_dir = f"{config.MODELS_RUNS_EUROCORDEX_11_RCP85}/tas_Swiss/"
+    precip_dir = f"{config.MODELS_RUNS_EUROCORDEX_11_RCP85}/pr_Swiss/"
     obs_tas_path = f"{config.DATASETS_TRAINING_DIR}/TabsD_step2_coarse.nc"
     obs_precip_path = f"{config.DATASETS_TRAINING_DIR}/RhiresD_step2_coarse.nc"
     bc_dir = f"{config.BIAS_CORRECTED_DIR}/dOTC/"
@@ -248,7 +248,7 @@ def main():
             out_tas_path, out_pr_path
         )
 
-    print("MC finished for bivariate temp and precip for RCP2.6")
+    print("MC finished for bivariate temp and precip for RCP8.5")
 
 if __name__ == "__main__":
     main()
