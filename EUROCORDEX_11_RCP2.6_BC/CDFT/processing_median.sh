@@ -9,22 +9,24 @@
 #SBATCH --partition=cpu
 ##SBATCH --partition=gpu
 
-source ../../environment.sh
-
 module load cdo
+source environment.sh
+cd /work/FAC/FGSE/IDYST/tbeucler/downscaling/sasthana/Downscaling/GCM_pipeline/EUROCORDEX_11_RCP2.6_BC/CDFT/
 
-#  tas_day_*.nc
-tas_files=(tas_day_*.nc)
+
+tas_files=(tas_day_EUR-11_*.nc)
 if [ -e "${tas_files[0]}" ]; then
     cdo ensmedian "${tas_files[@]}" ensemble_median_tas_day_rcp26.nc
 else
-    echo "No tas_day_*.nc files found."
+    echo "No tas_day_EUR-11_*.nc files found."
 fi
 
-#  pr_day_*.nc
-pr_files=(pr_day_*.nc)
+
+
+
+pr_files=(pr_day_EUR-11_*.nc)
 if [ -e "${pr_files[0]}" ]; then
     cdo ensmedian "${pr_files[@]}" ensemble_median_pr_day_rcp26.nc
 else
-    echo "No pr_day_*.nc files found."
+    echo "No pr_day_EUR-11_*.nc files found."
 fi
