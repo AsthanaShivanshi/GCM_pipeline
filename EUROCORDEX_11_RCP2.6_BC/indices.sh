@@ -4,7 +4,7 @@
 #SBATCH --error=logs/pss_climatology_rcp26_job_error-%j.txt
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
-#SBATCH --time=02:00:00
+#SBATCH --time=10:00:00
 #SBATCH --mem=256G
 #SBATCH --partition=cpu
 ##SBATCH --partition=gpu
