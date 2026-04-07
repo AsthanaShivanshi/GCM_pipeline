@@ -24,7 +24,6 @@ elev_norm = (elev - np.mean(elev)) / np.std(elev)
 
 
 
-
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 with open(f"{config.DATASETS_TRAINING_DIR}/RhiresD_scaling_params.json", 'r') as f:
@@ -44,6 +43,11 @@ def denorm_temp(x, params):
 def reverse_zlog_pr(x, params):
     return np.exp(x * params['std'] + params['mean']) - params['epsilon']
 
+
+
+
+
+
 # UNet
 unet_regr = DownscalingUnetLightning(
     in_ch=3,
@@ -56,7 +60,7 @@ unet_regr = DownscalingUnetLightning(
 
 
 unet_regr_ckpt = torch.load(
-    f"{config.LDM_PROJ_PATH}/trained_ckpts_optimised/12km/UNet_ckpts/LDM_conditional.models.unet_module.DownscalingUnetLightning_logtransform_lr0.01_precip_loss_weight5.0_1.0_crps[0, 1]_factor0.5_pat3.ckpt.ckpt",
+    f"{config.LDM_PROJ_PATH}/trained_ckpts_optimised/12km/UNet_ckpts/LDM_conditional.models.unet_module.DownscalingUnetLightning_12km_logtransform_lr0.001_precip_loss_weight1.0_1.0_crps[]_factor0.5_pat3.ckpt",
     map_location="cpu"
 )["state_dict"]
 
@@ -92,7 +96,9 @@ config_dict = {
 
 
 
-os.makedirs("EUR-CH(SR)", exist_ok=True)
+os.makedirs("ALP-FINE", exist_ok=True)
+
+
 
 for tas_path in tas_files:
     tas_id = get_id(tas_path, "tas")
@@ -113,7 +119,6 @@ for tas_path in tas_files:
         'precip': xr.open_dataset(pr_path),
         'temp': xr.open_dataset(tas_path)
     }
-
 
 
 
@@ -143,7 +148,7 @@ for tas_path in tas_files:
         unet_all[idx, 0] = pr_down
         unet_all[idx, 1] = tas_down
 
-    out_path = f"EUR-CH(SR)/UNet_downscaled_RCP26_CDFT_{os.path.basename(tas_path)}"
+    out_path = f"ALP-FINE/UNet_downscaled_RCP26_CDFT_{os.path.basename(tas_path)}"
     ds_out = xr.Dataset(
         {
             "pr_downscaled": (("time", "y", "x"), unet_all[:, 0]),
