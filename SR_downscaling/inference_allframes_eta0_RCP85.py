@@ -53,7 +53,7 @@ unet_regr = DownscalingUnetLightning(
     precip_scaling_json=f"{config.DATASETS_TRAINING_DIR}/RhiresD_scaling_params.json",
 )
 unet_regr_ckpt = torch.load(
-    f"{config.LDM_PROJ_PATH}/trained_ckpts_optimised/12km/UNet_ckpts/LDM_conditional.models.unet_module.DownscalingUnetLightning_12km_logtransform_lr0.001_precip_loss_weight1.0_1.0_crps[]_factor0.5_pat3.ckpt",
+    f"{config.DM_DIR}/LDM_conditional/trained_ckpts_optimised/12km/UNet_ckpts/LDM_conditional.models.unet_module.DownscalingUnetLightning_12km_logtransform_lr0.001_precip_loss_weight1.0_1.0_crps[]_factor0.5_pat3.ckpt.ckpt",
     map_location="cpu"
 )["state_dict"]
 unet_regr.load_state_dict(unet_regr_ckpt, strict=False)
