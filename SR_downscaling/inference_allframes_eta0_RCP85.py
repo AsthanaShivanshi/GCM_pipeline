@@ -10,6 +10,7 @@ sys.path.append(config.DDIM_PROJ_PATH)
 sys.path.append(config.LDM_PROJ_PATH)
 sys.path.append(config.DM_DIR)
 import argparse
+import rioxarray
 
 from models.unet_module import DownscalingUnetLightning
 from DownscalingDataModule import DownscalingDataModule
@@ -168,7 +169,7 @@ if __name__ == "__main__":
 
         ds = DownscalingDataset(input_ds, target_ds, config_dict, elevation_path=elevation_path)
         times = input_ds['temp']['time'].values
-        spatial_shape = elev_norm.shape
+        spatial_shape = input_ds['temp']['lat'].shape[0], input_ds['temp']['lon'].shape[0]
         N = len(ds)
         unet_all = np.empty((N, 2, *spatial_shape), dtype=np.float32)
         ddim_all = np.empty((N, num_samples, 2, *spatial_shape), dtype=np.float32)
@@ -250,8 +251,8 @@ if __name__ == "__main__":
             }
         )
 
-        out_path_unet = f"ALP-FINE_8.5/UNet_downscaled_RCP85_CDFT_5samples_{args.start_year}-{args.end_year}_{os.path.basename(tas_path)}"
-        out_path_ddim = f"ALP-FINE_8.5/DDIM_downscaled_RCP85_CDFT_5samples_{args.start_year}-{args.end_year}_{os.path.basename(tas_path)}"
+        out_path_unet = f"ALP-FINE_8.5/EQM/UNet_downscaled_RCP85_CDFT_5samples_{args.start_year}-{args.end_year}_{os.path.basename(tas_path)}"
+        out_path_ddim = f"ALP-FINE_8.5/EQM/DDIM_downscaled_RCP85_CDFT_5samples_{args.start_year}-{args.end_year}_{os.path.basename(tas_path)}"
         
         
         
