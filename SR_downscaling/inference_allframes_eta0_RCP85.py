@@ -25,8 +25,7 @@ from models.components.diff.conditioner import AFNOConditionerNetCascade
 from models.diff_module import DDIMResidualContextual
 
 
-
-
+import subprocess
 
 
 
@@ -37,13 +36,22 @@ num_samples = 5  # Deterministic sample
 eta = 0.0       # DDIM
 S = 50          # Number of DDIM steps
 
+manual_seed=124
 
 
 
+ref_ds_temp = xr.open_dataset(f"{config.DATASETS_TRAINING_DIR}/TabsD_target_train_scaled.nc")
+ref_lat = ref_ds_temp["lat"].values
+ref_lon = ref_ds_temp["lon"].values
 
-ref_ds = xr.open_dataset(f"{config.DATASETS_TRAINING_DIR}/TabsD_target_train_scaled.nc")
-ref_lat = ref_ds["lat"].values
-ref_lon = ref_ds["lon"].values
+
+ref_ds_precip = xr.open_dataset(f"{config.DATASETS_TRAINING_DIR}/RhiresD_target_train_scaled.nc")
+
+ref_grid_pr = f"{config.DATASETS_TRAINING_DIR}/RhiresD_step1_latlon.nc"
+ref_grid_tas = f"{config.DATASETS_TRAINING_DIR}/TabsD_step1_latlon.nc"
+
+bicubic_dir = f"{config.BIAS_CORRECTED_DIR_RCP85}/dOTC"
+
 
 
 
@@ -92,8 +100,6 @@ unet_regr.eval()
 
 
 
-
-
 denoiser = UNetModel(
     model_channels=32,
     in_channels=2,
@@ -107,6 +113,10 @@ denoiser = UNetModel(
     use_fp16=False,
     num_heads=2
 )
+
+
+
+
 conditioner = AFNOConditionerNetCascade(
     autoencoder=None,
     input_channels=[2],
@@ -115,6 +125,9 @@ conditioner = AFNOConditionerNetCascade(
     cascade_depth=3,
     context_ch=[32, 64, 128]
 )
+
+
+
 ddim = DDIMResidualContextual(
     denoiser=denoiser,
     context_encoder=conditioner,
@@ -136,15 +149,16 @@ ddim_ckpt = torch.load(
     f"{config.DDIM_PROJ_PATH}/trained_ckpts/12km/DDIM_checkpoint_L1_cosine_schedule_loss_parameterisation_v.ckpt",
     map_location=device
 )
+
+
+
 ddim.load_state_dict(ddim_ckpt["state_dict"], strict=False)
 ddim = ddim.to(device)
 ddim.eval()
 sampler = DDIMSampler(ddim, device=device)
 
-tas_dir = f"{config.BIAS_CORRECTED_DIR_RCP85}/EQM"
-pr_dir = f"{config.BIAS_CORRECTED_DIR_RCP85}/EQM"
-
-
+tas_dir = f"{config.BIAS_CORRECTED_DIR_RCP85}/dOTC"
+pr_dir = f"{config.BIAS_CORRECTED_DIR_RCP85}/dOTC"
 
 
 
@@ -160,6 +174,9 @@ pr_files = [os.path.join(pr_dir, f) for f in os.listdir(pr_dir) if f.startswith(
 
 pr_dict = {get_id(f, "pr"): f for f in pr_files}
 
+
+
+
 config_dict = {
     'variables': {
         'input': {'precip': 'pr', 'temp': 'tas'},
@@ -170,7 +187,7 @@ config_dict = {
 
 
 
-os.makedirs("ALP-FINE_8.5/EQM", exist_ok=True)
+os.makedirs("ALP-FINE_8.5/dOTC", exist_ok=True)
 
 
 
@@ -183,6 +200,9 @@ if __name__ == "__main__":
     parser.add_argument("--end_year", type=int, required=True, help="End year")
     args = parser.parse_args()
 
+
+
+
     for tas_path in tas_files:
         tas_id = get_id(tas_path, "tas")
         pr_path = pr_dict.get(tas_id, None)
@@ -192,6 +212,43 @@ if __name__ == "__main__":
 
         print(f"Processing {tas_path} and {pr_path}")
 
+
+
+# bicubic
+        bicubic_tas_path = os.path.join(
+            bicubic_dir, f"tas_bicubic_{tas_id}"
+        )
+        bicubic_pr_path = os.path.join(
+            bicubic_dir, f"pr_bicubic_{get_id(pr_path, 'pr')}"
+        )
+
+
+
+        if not os.path.exists(bicubic_tas_path):
+            print(f"Running CDO bicubic interpolation for {tas_path}")
+            subprocess.run([
+                "cdo", "remapbic," + ref_grid_tas, tas_path, bicubic_tas_path
+            ], check=True)
+        else:
+            print(f"Bicubic tas already exists: {bicubic_tas_path}")
+
+        # Interpolate pr
+        if not os.path.exists(bicubic_pr_path):
+            print(f"Running CDO bicubic interpolation for {pr_path}")
+            subprocess.run([
+                "cdo", "remapbic," + ref_grid_pr, pr_path, bicubic_pr_path
+            ], check=True)
+        else:
+            print(f"Bicubic pr already exists: {bicubic_pr_path}")
+        
+        
+        
+        tas_path = bicubic_tas_path
+        pr_path = bicubic_pr_path
+
+
+        print(f"Processing {tas_path} and {pr_path}")
+        
         input_ds = {
             'precip': xr.open_dataset(pr_path),
             'temp': xr.open_dataset(tas_path)
@@ -199,7 +256,10 @@ if __name__ == "__main__":
         target_ds = {
             'precip': xr.open_dataset(pr_path),
             'temp': xr.open_dataset(tas_path)
-        }
+        } #used for dataloader, not used for inf. 
+
+
+
 
         time_start = f"{args.start_year}-01-01"
         time_end = f"{args.end_year}-12-31"
@@ -222,11 +282,27 @@ if __name__ == "__main__":
         ddim_all = np.empty((N, num_samples, 2, *spatial_shape), dtype=np.float32)
         params_list = [pr_params, temp_params]
 
+
+
+
+        var_names = ["precip", "temp"]
+        N_vals = np.arange(spatial_shape[0])
+        E_vals = np.arange(spatial_shape[1])
+        lat2d, lon2d = None, None
+        if ref_lat.ndim == 2 and ref_lon.ndim == 2:
+            lat2d, lon2d = ref_lat, ref_lon
+        elif ref_lat.ndim == 1 and ref_lon.ndim == 1:
+            lat2d, lon2d = np.meshgrid(ref_lat, ref_lon, indexing="ij")
+        encoding = {}
+
+        
+
+        #UNet 
+
         for idx in tqdm(range(N), desc=f"Downscaling {os.path.basename(tas_path)}"):
             input_tensor, _ = ds[idx]
             input_tensor = input_tensor.unsqueeze(0).to(device)
             with torch.no_grad():
-                # UNet
                 unet_pred = unet_regr(input_tensor)
                 unet_pred_np = unet_pred[0].cpu().numpy()
                 unet_pred_denorm = np.empty_like(unet_pred_np)
@@ -234,44 +310,14 @@ if __name__ == "__main__":
                     unet_pred_denorm[i] = denorm_pr(unet_pred_np[i], pr_params) if i == 0 else denorm_temp(unet_pred_np[i], params)
                 unet_all[idx] = unet_pred_denorm
 
-                # DDIM
-                context = [(unet_pred, None)]
-                sample_shape = unet_pred.shape[1:]
-                for j in range(num_samples):
-                    torch.manual_seed(124 + j)
-                    np.random.seed(124 + j)
-                    z = torch.randn((1, *sample_shape), device=device)
-                    residual, _ = sampler.sample(
-                        S=S,
-                        batch_size=1,
-                        shape=sample_shape,
-                        conditioning=context,
-                        eta=eta,
-                        verbose=False,
-                        x_T=z,
-                        schedule="cosine"
-                    )
-                    final_pred = unet_pred + residual
-                    final_pred_np = final_pred[0].cpu().numpy()
-                    ddim_pred_denorm = np.empty_like(final_pred_np)
-                    for i, params in enumerate(params_list):
-                        ddim_pred_denorm[i] = denorm_pr(final_pred_np[i], pr_params) if i == 0 else denorm_temp(final_pred_np[i], params)
-                    ddim_all[idx, j] = ddim_pred_denorm
-
         unet_preds_np = np.transpose(unet_all, (0, 2, 3, 1))  # (time, y, x, channel)
-        ddim_preds_np = np.transpose(ddim_all, (0, 1, 2, 3, 4))  # (time, sample, channel, y, x)
-        ddim_preds_np = np.transpose(ddim_preds_np, (0, 1, 3, 4, 2))  # (time, sample, y, x, channel)
-        var_names = ["precip", "temp"]
-        encoding = {var: {"_FillValue": np.nan} for var in var_names}
 
 
 
 
-        with xr.open_dataset(pr_path) as ds_latlon:
-            lat2d = ds_latlon["lat"].values if "lat" in ds_latlon else None
-            lon2d = ds_latlon["lon"].values if "lon" in ds_latlon else None
-            N_vals = ds_latlon["N"].values if "N" in ds_latlon.dims else np.arange(unet_preds_np.shape[1])
-            E_vals = ds_latlon["E"].values if "E" in ds_latlon.dims else np.arange(unet_preds_np.shape[2])
+
+
+
 
         ds_unet = xr.Dataset(
             {
@@ -287,35 +333,69 @@ if __name__ == "__main__":
             }
         )
 
-
-
-        ds_ddim = xr.Dataset(
-            {
-                var: (("time", "sample", "N", "E"), ddim_preds_np[:, :, :, :, i])
-                for i, var in enumerate(var_names)
-            },
-            coords={
-                "time": times,
-                "sample": np.arange(num_samples),
-                "N": N_vals,
-                "E": E_vals,
-                "lat": (("N", "E"), lat2d) if lat2d is not None else None,
-                "lon": (("N", "E"), lon2d) if lon2d is not None else None,
-            }
-        )
-
-        out_path_unet = f"ALP-FINE_8.5/EQM/UNet_downscaled_RCP85_CDFT_5samples_{args.start_year}-{args.end_year}_{os.path.basename(tas_path)}"
-        out_path_ddim = f"ALP-FINE_8.5/EQM/DDIM_downscaled_RCP85_CDFT_5samples_{args.start_year}-{args.end_year}_{os.path.basename(tas_path)}"
-        
+        out_path_unet = f"ALP-FINE_8.5/dOTC/UNet_RCP85_{args.start_year}-{args.end_year}_tas_{get_id(pr_path, 'pr')}"
         ds_unet.to_netcdf(out_path_unet, encoding=encoding)
-        ds_ddim.to_netcdf(out_path_ddim, encoding=encoding)
         print(f"UNet Op saved to {out_path_unet}")
-        print(f"DDIM Op saved to {out_path_ddim}")
 
 
 
 
 
+
+        #DDIM
+        for idx in tqdm (range(N), desc="DDIM Sampling"):
+            input_tensor,_ = ds[idx]
+            input_tensor= input_tensor.unsqueeze(0).to(device)
+
+
+            with torch.no_grad():
+                unet_pred = unet_regr(input_tensor)
+                context = [(unet_pred, None)]  # Pass the full unet_pred and None for t_relative
+                sample_shape = unet_pred.shape[1:]  # (C, H, W)
+
+                for j in range(num_samples):
+                    torch.manual_seed(manual_seed + j)
+                    np.random.seed(manual_seed + j)
+
+                    z = torch.randn((1, *sample_shape), device=device)
+
+#residual is a tensor, niot a tuple : AsthanaSh
+                    residual, _ = sampler.sample(
+                        S=S,
+                        batch_size=1,
+                        shape=sample_shape,
+                        conditioning=context,
+                        eta=eta,
+                        verbose=False,
+                        x_T=z,
+                        schedule="cosine"
+                    )
+
+
+                    final_pred = unet_pred + residual
+
+                    final_pred_np = final_pred[0].cpu().numpy()
+                    ddim_pred_denorm = np.empty_like(final_pred_np)
+                                
+                                
+                    for i, params in enumerate(params_list):
+                        ddim_pred_denorm[i] = denorm_pr(final_pred_np[i], pr_params) if i == 0 else denorm_temp(final_pred_np[i], params)
+                    ddim_all[idx, j] = ddim_pred_denorm
+
+        ddim_preds_np = np.transpose(ddim_all, (0, 1, 3, 4, 2))  # (time, sample, y, x, channel)
+
+        ds_ddim= xr.Dataset(
+            {var: (("time", "sample", "N", "E"), ddim_preds_np[:, :, :, :, i]) 
+            for i, var in enumerate(var_names)},
+            coords={"time":times,
+            "sample": np.arange(num_samples),
+             "lat": (("N", "E"), lat2d) if lat2d is not None else None,
+            "lon": (("N", "E"), lon2d) if lon2d is not None else None,
+                    }
+                )
+
+        out_path_ddim = f"ALP-FINE_8.5/dOTC/DDIM_5samples_RCP85_{args.start_year}-{args.end_year}_tas_{get_id(pr_path, 'pr')}"
+        ds_ddim.to_netcdf(out_path_ddim, encoding=encoding)
 
         for ds_ in input_ds.values():
             ds_.close()
