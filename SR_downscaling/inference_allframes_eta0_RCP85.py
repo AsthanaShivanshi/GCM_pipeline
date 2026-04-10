@@ -6,31 +6,53 @@ import torch
 import json
 from tqdm import tqdm
 import xarray as xr
+
+
+
+import argparse
+import rasterio
+
 sys.path.append(config.DDIM_PROJ_PATH)
 sys.path.append(config.LDM_PROJ_PATH)
 sys.path.append(config.DM_DIR)
-import argparse
-import rioxarray
 
 from models.unet_module import DownscalingUnetLightning
 from DownscalingDataModule import DownscalingDataModule
 from Downscaling_Dataset_Prep import DownscalingDataset
 from models.components.diff.denoiser.unet import UNetModel
 from models.components.diff.denoiser.ddim import DDIMSampler
-
-
 from models.components.diff.conditioner import AFNOConditionerNetCascade
 from models.diff_module import DDIMResidualContextual
 
+
+
+
+
+
+
+
+
+
 num_samples = 5  # Deterministic sample
-eta = 0.0       #  DDIM
-S=50            # Number of DDIM steps
+eta = 0.0       # DDIM
+S = 50          # Number of DDIM steps
+
+
+
+
 
 ref_ds = xr.open_dataset(f"{config.DATASETS_TRAINING_DIR}/TabsD_target_train_scaled.nc")
 ref_lat = ref_ds["lat"].values
 ref_lon = ref_ds["lon"].values
 
+
+
+
 elevation_path = f"{config.BASE_DIR}/sasthana/Downscaling/GCM_pipeline/elevation.tif"
+with rasterio.open(elevation_path) as src:
+    elevation_array = src.read(1).astype(np.float32) #elev as numpy
+
+
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -45,7 +67,11 @@ def denorm_pr(x, pr_params):
 def denorm_temp(x, params):
     return x * params['std'] + params['mean']
 
-# UNet
+
+
+
+
+
 unet_regr = DownscalingUnetLightning(
     in_ch=3,
     out_ch=2,
@@ -55,13 +81,19 @@ unet_regr = DownscalingUnetLightning(
 )
 unet_regr_ckpt = torch.load(
     f"{config.DM_DIR}/LDM_conditional/trained_ckpts_optimised/12km/UNet_ckpts/LDM_conditional.models.unet_module.DownscalingUnetLightning_12km_logtransform_lr0.001_precip_loss_weight1.0_1.0_crps[]_factor0.5_pat3.ckpt.ckpt",
-    map_location="cpu"
+    map_location="cpu",
+    weights_only=False
 )["state_dict"]
 unet_regr.load_state_dict(unet_regr_ckpt, strict=False)
 unet_regr = unet_regr.to(device)
 unet_regr.eval()
 
-# DDIM
+
+
+
+
+
+
 denoiser = UNetModel(
     model_channels=32,
     in_channels=2,
@@ -97,6 +129,9 @@ ddim = DDIMResidualContextual(
     ema_decay=0.9999,
     lr=1e-4
 )
+
+
+
 ddim_ckpt = torch.load(
     f"{config.DDIM_PROJ_PATH}/trained_ckpts/12km/DDIM_checkpoint_L1_cosine_schedule_loss_parameterisation_v.ckpt",
     map_location=device
@@ -109,9 +144,16 @@ sampler = DDIMSampler(ddim, device=device)
 tas_dir = f"{config.BIAS_CORRECTED_DIR_RCP85}/EQM"
 pr_dir = f"{config.BIAS_CORRECTED_DIR_RCP85}/EQM"
 
+
+
+
+
 def get_id(path, var_prefix):
     fname = os.path.basename(path)
     return fname.replace(f"{var_prefix}_day_", "")
+
+
+
 
 tas_files = [os.path.join(tas_dir, f) for f in os.listdir(tas_dir) if f.startswith("tas_day") and f.endswith(".nc")]
 pr_files = [os.path.join(pr_dir, f) for f in os.listdir(pr_dir) if f.startswith("pr_day") and f.endswith(".nc")]
@@ -126,7 +168,10 @@ config_dict = {
     'preprocessing': {'nan_to_num': True, 'nan_value': 0.0}
 }
 
-os.makedirs("ALP-FINE_8.5", exist_ok=True)
+
+
+os.makedirs("ALP-FINE_8.5/EQM", exist_ok=True)
+
 
 
 
@@ -134,8 +179,8 @@ os.makedirs("ALP-FINE_8.5", exist_ok=True)
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--start_year", type=int, required=True, help="Start year for downscaling (e.g. 1971)")
-    parser.add_argument("--end_year", type=int, required=True, help="End year for downscaling (e.g. 1980)")
+    parser.add_argument("--start_year", type=int, required=True, help="Start year")
+    parser.add_argument("--end_year", type=int, required=True, help="End year")
     args = parser.parse_args()
 
     for tas_path in tas_files:
@@ -144,8 +189,6 @@ if __name__ == "__main__":
         if pr_path is None:
             print(f"No matching pr file for {tas_path}")
             continue
-
-
 
         print(f"Processing {tas_path} and {pr_path}")
 
@@ -162,14 +205,18 @@ if __name__ == "__main__":
         time_end = f"{args.end_year}-12-31"
         for v in input_ds:
             input_ds[v] = input_ds[v].sel(time=slice(time_start, time_end))
-            input_ds[v] = input_ds[v].interp(lat=ref_lat, lon=ref_lon, method="cubic")
         for v in target_ds:
             target_ds[v] = target_ds[v].sel(time=slice(time_start, time_end))
-            target_ds[v] = target_ds[v].interp(lat=ref_lat, lon=ref_lon, method="cubic")
 
-        ds = DownscalingDataset(input_ds, target_ds, config_dict, elevation_path=elevation_path)
+
+
+
+        ds = DownscalingDataset(input_ds, target_ds, config_dict, elevation_path=elevation_array)
+        
+        
+        input_tensor, _ = ds[0]
+        spatial_shape = input_tensor.shape[1:]  # (H, W)
         times = input_ds['temp']['time'].values
-        spatial_shape = input_ds['temp']['lat'].shape[0], input_ds['temp']['lon'].shape[0]
         N = len(ds)
         unet_all = np.empty((N, 2, *spatial_shape), dtype=np.float32)
         ddim_all = np.empty((N, num_samples, 2, *spatial_shape), dtype=np.float32)
@@ -211,55 +258,66 @@ if __name__ == "__main__":
                         ddim_pred_denorm[i] = denorm_pr(final_pred_np[i], pr_params) if i == 0 else denorm_temp(final_pred_np[i], params)
                     ddim_all[idx, j] = ddim_pred_denorm
 
-
-
         unet_preds_np = np.transpose(unet_all, (0, 2, 3, 1))  # (time, y, x, channel)
         ddim_preds_np = np.transpose(ddim_all, (0, 1, 2, 3, 4))  # (time, sample, channel, y, x)
         ddim_preds_np = np.transpose(ddim_preds_np, (0, 1, 3, 4, 2))  # (time, sample, y, x, channel)
         var_names = ["precip", "temp"]
         encoding = {var: {"_FillValue": np.nan} for var in var_names}
 
+
+
+
         with xr.open_dataset(pr_path) as ds_latlon:
             lat2d = ds_latlon["lat"].values if "lat" in ds_latlon else None
             lon2d = ds_latlon["lon"].values if "lon" in ds_latlon else None
+            N_vals = ds_latlon["N"].values if "N" in ds_latlon.dims else np.arange(unet_preds_np.shape[1])
+            E_vals = ds_latlon["E"].values if "E" in ds_latlon.dims else np.arange(unet_preds_np.shape[2])
 
         ds_unet = xr.Dataset(
             {
-                var: (("time", "y", "x"), unet_preds_np[:, :, :, i])
+                var: (("time", "N", "E"), unet_preds_np[:, :, :, i])
                 for i, var in enumerate(var_names)
             },
             coords={
                 "time": times,
-                "y": np.arange(spatial_shape[0]),
-                "x": np.arange(spatial_shape[1]),
-                "lat": (("y", "x"), lat2d) if lat2d is not None else None,
-                "lon": (("y", "x"), lon2d) if lon2d is not None else None,
+                "N": N_vals,
+                "E": E_vals,
+                "lat": (("N", "E"), lat2d) if lat2d is not None else None,
+                "lon": (("N", "E"), lon2d) if lon2d is not None else None,
             }
         )
+
+
+
         ds_ddim = xr.Dataset(
             {
-                var: (("time", "sample", "y", "x"), ddim_preds_np[:, :, :, :, i])
+                var: (("time", "sample", "N", "E"), ddim_preds_np[:, :, :, :, i])
                 for i, var in enumerate(var_names)
             },
             coords={
                 "time": times,
                 "sample": np.arange(num_samples),
-                "y": np.arange(spatial_shape[0]),
-                "x": np.arange(spatial_shape[1]),
-                "lat": (("y", "x"), lat2d) if lat2d is not None else None,
-                "lon": (("y", "x"), lon2d) if lon2d is not None else None,
+                "N": N_vals,
+                "E": E_vals,
+                "lat": (("N", "E"), lat2d) if lat2d is not None else None,
+                "lon": (("N", "E"), lon2d) if lon2d is not None else None,
             }
         )
 
         out_path_unet = f"ALP-FINE_8.5/EQM/UNet_downscaled_RCP85_CDFT_5samples_{args.start_year}-{args.end_year}_{os.path.basename(tas_path)}"
         out_path_ddim = f"ALP-FINE_8.5/EQM/DDIM_downscaled_RCP85_CDFT_5samples_{args.start_year}-{args.end_year}_{os.path.basename(tas_path)}"
         
-        
-        
         ds_unet.to_netcdf(out_path_unet, encoding=encoding)
         ds_ddim.to_netcdf(out_path_ddim, encoding=encoding)
-        print(f"UNet downscaled output saved to {out_path_unet}")
-        print(f"DDIM downscaled output saved to {out_path_ddim}")
+        print(f"UNet Op saved to {out_path_unet}")
+        print(f"DDIM Op saved to {out_path_ddim}")
 
 
-        
+
+
+
+
+        for ds_ in input_ds.values():
+            ds_.close()
+        for ds_ in target_ds.values():
+            ds_.close()
