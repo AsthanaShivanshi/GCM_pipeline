@@ -8,7 +8,7 @@
 #SBATCH --mem=256G
 #SBATCH --partition=gpu
 #SBATCH --gres=gpu:1
-#SBATCH --array=0-5  ##decadal jobs... 
+#SBATCH --array=0-5  ##decadal jobs... 6,,..
 
 module load python
 source diffscaler.sh
