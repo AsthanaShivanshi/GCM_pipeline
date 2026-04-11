@@ -20,19 +20,28 @@ export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
 export MKL_NUM_THREADS=$SLURM_CPUS_PER_TASK
 export NUMEXPR_NUM_THREADS=$SLURM_CPUS_PER_TASK
 
-
-
 START_YEARS=(1971 1991 2011 2031 2051 2071)
 END_YEARS=(1990 2010 2030 2050 2070 2099)
 
 START_YEAR=${START_YEARS[$SLURM_ARRAY_TASK_ID]}
 END_YEAR=${END_YEARS[$SLURM_ARRAY_TASK_ID]}
 
-echo "($START_YEAR-$END_YEAR) started"
 
 
-python SR_downscaling/inference_allframes_eta0_RCP85.py --start_year $START_YEAR --end_year $END_YEAR
-echo "UNet_SR and DDIM for RCP85 ($START_YEAR-$END_YEAR) finished"
+# MODE to "unet" // "ddim" 
+MODE=${MODE:-unet}
+
+
+
+
+
+
+echo "($START_YEAR-$END_YEAR) started in mode $MODE"
+
+python SR_downscaling/inference_allframes_eta0_RCP85.py --start_year $START_YEAR --end_year $END_YEAR --mode $MODE
+
+echo "$MODE for RCP85 ($START_YEAR-$END_YEAR) finished"
+
 
 
 JOBID=$SLURM_JOB_ID
@@ -40,15 +49,15 @@ JOBID=$SLURM_JOB_ID
 echo "Summary of SLURM array job $JOBID:"
 sacct -j ${JOBID} --format=JobID,JobName,Elapsed,MaxRSS,AllocCPUS,ReqMem,State
 
-
-
-#Agrr compute stats::
-
-
 STATS_FILE="ALP-FINE_8.5/dOTC/slurm_stats_${START_YEAR}_${END_YEAR}.txt"
 
 echo "Summary of array job $JOBID:" > $STATS_FILE
 sacct -j ${JOBID} --format=JobID,JobName,Elapsed,MaxRSS,AllocCPUS,ReqMem,State >> $STATS_FILE
 
-
 cat ALP-FINE_8.5/dOTC/compute_stats_${START_YEAR}-${END_YEAR}.txt >> $STATS_FILE
+
+
+#Running note to self
+
+#sbatch --export=MODE=unet SR_UNet.sh
+#sbatch --export=MODE=ddim SR_UNet.sh
