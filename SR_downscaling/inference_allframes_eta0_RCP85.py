@@ -342,11 +342,27 @@ if __name__ == "__main__":
                 ds_.close()
 
 
-        if args.end_year == 2099:
-            for pr_id in pr_dict:
-                pattern = f"ALP-FINE_8.5/{args.ensemble}/UNet_RCP85_{args.start_year}-{args.end_year}_tas_{pr_id}"
-                out_path = f"ALP-FINE_8.5/{args.ensemble}/UNet_RCP85_{args.start_year}-{args.end_year}_tas_{pr_id}_concat.nc"
-                cat_file(pattern, out_path)
+            if args.end_year == 2099:
+                decades = [
+                    (1971, 1990), (1991, 2010), (2011, 2030),
+                    (2031, 2050), (2051, 2070), (2071, 2099)
+                ]
+                for pr_id in pr_dict:
+                    all_exist = True
+                    for start, end in decades:
+                        fname = f"ALP-FINE_8.5/{args.ensemble}/UNet_RCP85_{start}-{end}_tas_{pr_id}"
+                        if not os.path.exists(fname):
+                            print(f"Missing decadal file: {fname}")
+                            all_exist = False
+                    out_path = f"ALP-FINE_8.5/{args.ensemble}/UNet_RCP85_1971-2099_tas_{pr_id}_concat.nc"
+                    if all_exist:
+                        if os.path.exists(out_path):
+                            print(f"Concatenated file {out_path} already exists, skipping.")
+                            continue
+                        pattern = f"ALP-FINE_8.5/{args.ensemble}/UNet_RCP85_*_tas_{pr_id}"
+                        cat_file(pattern, out_path)
+                    else:
+                        print(f"Not all decadal files present for {pr_id}, skipping concatenation.")
 
 
 
