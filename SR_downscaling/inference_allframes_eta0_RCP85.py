@@ -6,11 +6,11 @@ import torch
 import json
 from tqdm import tqdm
 import xarray as xr
-
-
-
 import argparse
 import rasterio
+import glob
+import subprocess
+import concurrent.futures
 
 sys.path.append(config.DDIM_PROJ_PATH)
 sys.path.append(config.LDM_PROJ_PATH)
@@ -24,17 +24,8 @@ from models.components.diff.denoiser.ddim import DDIMSampler
 from models.components.diff.conditioner import AFNOConditionerNetCascade
 from models.diff_module import DDIMResidualContextual
 
-import glob
-import subprocess
-
-import concurrent.futures
-
 def run_cdo(cmd):
     subprocess.run(cmd, check=True)
-
-
-
-
 
 def cat_file(pattern, out_path, dim="time"):
     files = sorted(glob.glob(pattern))
@@ -52,40 +43,26 @@ def cat_file(pattern, out_path, dim="time"):
 
 
 
-
-
-
-
-
 num_samples = 5  # Deterministic sample
 eta = 0.0       # DDIM
 S = 50          # Number of DDIM steps
-
 manual_seed=124
+
+
 
 
 
 ref_ds_temp = xr.open_dataset(f"{config.DATASETS_TRAINING_DIR}/TabsD_target_train_scaled.nc")
 ref_lat = ref_ds_temp["lat"].values
 ref_lon = ref_ds_temp["lon"].values
-
-
 ref_ds_precip = xr.open_dataset(f"{config.DATASETS_TRAINING_DIR}/RhiresD_target_train_scaled.nc")
 
 ref_grid_pr = f"{config.DATASETS_TRAINING_DIR}/RhiresD_step1_latlon.nc"
 ref_grid_tas = f"{config.DATASETS_TRAINING_DIR}/TabsD_step1_latlon.nc"
 
-bicubic_dir = f"{config.BIAS_CORRECTED_DIR_RCP85}/dOTC"
-
-
-
-
-
 elevation_path = f"{config.BASE_DIR}/sasthana/Downscaling/GCM_pipeline/elevation.tif"
 with rasterio.open(elevation_path) as src:
-    elevation_array = src.read(1).astype(np.float32) #elev as numpy
-
-
+    elevation_array = src.read(1).astype(np.float32)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -99,6 +76,7 @@ def denorm_pr(x, pr_params):
 
 def denorm_temp(x, params):
     return x * params['std'] + params['mean']
+
 
 
 
@@ -142,6 +120,7 @@ denoiser = UNetModel(
 
 
 
+
 conditioner = AFNOConditionerNetCascade(
     autoencoder=None,
     input_channels=[2],
@@ -150,6 +129,8 @@ conditioner = AFNOConditionerNetCascade(
     cascade_depth=3,
     context_ch=[32, 64, 128]
 )
+
+
 
 
 
@@ -170,37 +151,27 @@ ddim = DDIMResidualContextual(
 
 
 
+
+
 ddim_ckpt = torch.load(
     f"{config.DDIM_PROJ_PATH}/trained_ckpts/12km/DDIM_checkpoint_L1_cosine_schedule_loss_parameterisation_v.ckpt",
     map_location=device
 )
-
-
-
 ddim.load_state_dict(ddim_ckpt["state_dict"], strict=False)
 ddim = ddim.to(device)
 ddim.eval()
 sampler = DDIMSampler(ddim, device=device)
 
-tas_dir = f"{config.BIAS_CORRECTED_DIR_RCP85}/dOTC"
-pr_dir = f"{config.BIAS_CORRECTED_DIR_RCP85}/dOTC"
+
+
+
+
 
 
 
 def get_id(path, var_prefix):
     fname = os.path.basename(path)
     return fname.replace(f"{var_prefix}_day_", "")
-
-
-
-
-tas_files = [os.path.join(tas_dir, f) for f in os.listdir(tas_dir) if f.startswith("tas_day") and f.endswith(".nc")]
-pr_files = [os.path.join(pr_dir, f) for f in os.listdir(pr_dir) if f.startswith("pr_day") and f.endswith(".nc")]
-
-pr_dict = {get_id(f, "pr"): f for f in pr_files}
-
-
-
 
 config_dict = {
     'variables': {
@@ -212,7 +183,7 @@ config_dict = {
 
 
 
-os.makedirs("ALP-FINE_8.5/dOTC", exist_ok=True)
+
 
 
 
@@ -224,10 +195,24 @@ if __name__ == "__main__":
     parser.add_argument("--start_year", type=int, required=True, help="Start year")
     parser.add_argument("--end_year", type=int, required=True, help="End year")
     parser.add_argument("--mode", type=str, choices=["unet", "concat_unet", "ddim", "concat_ddim"], required=True)
+    parser.add_argument("--ensemble", type=str, choices=["EQM", "dOTC", "CDFT"], required=True, help="Ensemble name (EQM, dOTC, or CDFT)")
     args = parser.parse_args()
 
+    # Use ensemble argument to set directories
+    tas_dir = f"{config.BIAS_CORRECTED_DIR_RCP85}/{args.ensemble}"
+    pr_dir = f"{config.BIAS_CORRECTED_DIR_RCP85}/{args.ensemble}"
+    bicubic_dir = f"{config.BIAS_CORRECTED_DIR_RCP85}/{args.ensemble}"
+
+    tas_files = [os.path.join(tas_dir, f) for f in os.listdir(tas_dir) if f.startswith("tas_day") and f.endswith(".nc")]
+    pr_files = [os.path.join(pr_dir, f) for f in os.listdir(pr_dir) if f.startswith("pr_day") and f.endswith(".nc")]
+    pr_dict = {get_id(f, "pr"): f for f in pr_files}
+
+
+
+
+
+
     if args.mode == "unet":
-        # --- Downscaling for all tas/pr files ---
         for tas_path in tas_files:
             tas_id = get_id(tas_path, "tas")
             pr_path = pr_dict.get(tas_id, None)
@@ -245,6 +230,10 @@ if __name__ == "__main__":
             )
 
             bicubic_tasks = []
+
+
+
+
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 if not os.path.exists(bicubic_tas_path):
                     print(f"Running CDO bicubic interpolation for {tas_path}")
@@ -297,6 +286,8 @@ if __name__ == "__main__":
             N_vals = np.arange(spatial_shape[0])
             E_vals = np.arange(spatial_shape[1])
             lat2d, lon2d = None, None
+
+            
             if ref_lat.ndim == 2 and ref_lon.ndim == 2:
                 lat2d, lon2d = ref_lat, ref_lon
             elif ref_lat.ndim == 1 and ref_lon.ndim == 1:
@@ -304,6 +295,9 @@ if __name__ == "__main__":
             encoding = {}
 
             batch_size = 16
+
+
+
             for batch_start in tqdm(range(0, N, batch_size), desc=f"Downscaling {os.path.basename(tas_path)}"):
                 batch_end = min(batch_start + batch_size, N)
                 batch_inputs = []
@@ -338,7 +332,7 @@ if __name__ == "__main__":
                 }
             )
 
-            out_path_unet = f"ALP-FINE_8.5/dOTC/UNet_RCP85_{args.start_year}-{args.end_year}_tas_{get_id(pr_path, 'pr')}"
+            out_path_unet = f"ALP-FINE_8.5/{args.ensemble}/UNet_RCP85_{args.start_year}-{args.end_year}_tas_{get_id(pr_path, 'pr')}"
             ds_unet.to_netcdf(out_path_unet, encoding=encoding)
             print(f"UNet Op saved to {out_path_unet}")
 
@@ -348,13 +342,11 @@ if __name__ == "__main__":
                 ds_.close()
 
 
-
-#concatenation
-
-        for pr_id in pr_dict:
-            pattern = f"ALP-FINE_8.5/dOTC/UNet_RCP85_{args.start_year}-{args.end_year}_tas_{pr_id}"
-            out_path = f"ALP-FINE_8.5/dOTC/UNet_RCP85_{args.start_year}-{args.end_year}_tas_{pr_id}_concat.nc"
-            cat_file(pattern, out_path)
+        if args.end_year == 2099:
+            for pr_id in pr_dict:
+                pattern = f"ALP-FINE_8.5/{args.ensemble}/UNet_RCP85_{args.start_year}-{args.end_year}_tas_{pr_id}"
+                out_path = f"ALP-FINE_8.5/{args.ensemble}/UNet_RCP85_{args.start_year}-{args.end_year}_tas_{pr_id}_concat.nc"
+                cat_file(pattern, out_path)
 
 
 
@@ -362,13 +354,11 @@ if __name__ == "__main__":
 
 
 
-
-
-
-#ddim mode
 
 
     elif args.mode == "ddim":
+
+
         for tas_path in tas_files:
             tas_id = get_id(tas_path, "tas")
             pr_path = pr_dict.get(tas_id, None)
@@ -378,7 +368,7 @@ if __name__ == "__main__":
 
             print(f"Processing {tas_path} and {pr_path}")
 
-            out_path_ddim = f"ALP-FINE_8.5/dOTC/DDIM_5samples_RCP85_{args.start_year}-{args.end_year}_tas_{get_id(pr_path, 'pr')}"
+            out_path_ddim = f"ALP-FINE_8.5/{args.ensemble}/DDIM_5samples_RCP85_{args.start_year}-{args.end_year}_tas_{get_id(pr_path, 'pr')}"
             if os.path.exists(out_path_ddim):
                 print(f"DDIM file already exists for {pr_path}, skipping sampling.")
                 continue
@@ -389,9 +379,6 @@ if __name__ == "__main__":
             bicubic_pr_path = os.path.join(
                 bicubic_dir, f"pr_bicubic_{get_id(pr_path, 'pr')}"
             )
-
-
-
 
             bicubic_tasks = []
             with concurrent.futures.ThreadPoolExecutor() as executor:
@@ -411,9 +398,6 @@ if __name__ == "__main__":
                 else:
                     print(f"Bicubic pr already exists: {bicubic_pr_path}")
                 concurrent.futures.wait(bicubic_tasks)
-
-
-
 
             tas_path = bicubic_tas_path
             pr_path = bicubic_pr_path
@@ -503,9 +487,6 @@ if __name__ == "__main__":
                         }
             )
 
-
-
-
             ds_ddim.to_netcdf(out_path_ddim, encoding=encoding)
 
             for ds_ in input_ds.values():
@@ -515,34 +496,30 @@ if __name__ == "__main__":
 
 
 
-    if args.end_year==2099: #concat only happens when final run availab. 
-        decades = [
-            (1971, 1990), (1991, 2010), (2011, 2030),
-            (2031, 2050), (2051, 2070), (2071, 2099)
-        ]
 
 
 
-        for pr_id in pr_dict:
-            all_exist = True
-            decadal_files = []
-            for start, end in decades:
-                fname = f"ALP-FINE_8.5/dOTC/DDIM_5samples_RCP85_{start}-{end}_tas_{pr_id}"
-                if not os.path.exists(fname):
-                    print(f"Missing decadal file: {fname}")
-                    all_exist = False
+        if args.end_year == 2099:
+            decades = [
+                (1971, 1990), (1991, 2010), (2011, 2030),
+                (2031, 2050), (2051, 2070), (2071, 2099)
+            ]
+            for pr_id in pr_dict:
+                all_exist = True
+                decadal_files = []
+                for start, end in decades:
+                    fname = f"ALP-FINE_8.5/{args.ensemble}/DDIM_5samples_RCP85_{start}-{end}_tas_{pr_id}"
+                    if not os.path.exists(fname):
+                        print(f"Missing decadal file: {fname}")
+                        all_exist = False
+                    else:
+                        decadal_files.append(fname)
+                if all_exist:
+                    pattern = f"ALP-FINE_8.5/{args.ensemble}/DDIM_5samples_RCP85_*_tas_{pr_id}"
+                    out_path = f"ALP-FINE_8.5/{args.ensemble}/DDIM_5samples_RCP85_1971-2099_tas_{pr_id}_concat.nc"
+                    if os.path.exists(out_path):
+                        print(f"Concatenated file {out_path} already exists, skipping.")
+                        continue
+                    cat_file(pattern, out_path)
                 else:
-                    decadal_files.append(fname)
-            if all_exist:
-                pattern = f"ALP-FINE_8.5/dOTC/DDIM_5samples_RCP85_*_tas_{pr_id}"
-                out_path = f"ALP-FINE_8.5/dOTC/DDIM_5samples_RCP85_1971-2099_tas_{pr_id}_concat.nc"
-
-
-
-
-                if os.path.exists(out_path):
-                    print(f"Concatenated file {out_path} already exists, skipping.")
-                    continue
-                cat_file(pattern, out_path)
-            else:
-                print(f"Not all decadal files present for {pr_id}, skipping concatenation.")
+                    print(f"Not all decadal files present for {pr_id}, skipping concatenation.")
