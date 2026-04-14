@@ -12,6 +12,7 @@ import glob
 import subprocess
 import concurrent.futures
 
+
 sys.path.append(config.DDIM_PROJ_PATH)
 sys.path.append(config.LDM_PROJ_PATH)
 sys.path.append(config.DM_DIR)
@@ -23,6 +24,9 @@ from models.components.diff.denoiser.unet import UNetModel
 from models.components.diff.denoiser.ddim import DDIMSampler
 from models.components.diff.conditioner import AFNOConditionerNetCascade
 from models.diff_module import DDIMResidualContextual
+
+#Purpose : Bicubically interpolating and then SR  GCM_pipeline/EUROCORDEX_11_RCP8.5_BC
+#----------------------------------------------------------------------#
 
 def run_cdo(cmd):
     subprocess.run(cmd, check=True)
@@ -40,16 +44,24 @@ def cat_file(pattern, out_path, dim="time"):
         os.remove(f)
     print(f"Saved {out_path} and deleted intermediates.")
 
+#----------------------------------------------------------------------#
 
+decades= [(1971, 1990), 
+                  (1991,2010), 
+                  (2011,2030),
+                  (2031,2050),
+                  (2051,2080),
+                  (2081,2099),] #Used in bash script,, just mentioned here for clarity,, not used in the main script
 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-num_samples = 5  # Deterministic sample
+num_samples = 10  # Deterministic for fixed random seed
 eta = 0.0       # DDIM
 S = 50          # Number of DDIM steps
 manual_seed=124
 
 
-
+#----------------------------------------------------------------------#
 
 
 ref_ds_temp = xr.open_dataset(f"{config.DATASETS_TRAINING_DIR}/TabsD_target_train_scaled.nc")
@@ -60,11 +72,23 @@ ref_ds_precip = xr.open_dataset(f"{config.DATASETS_TRAINING_DIR}/RhiresD_target_
 ref_grid_pr = f"{config.DATASETS_TRAINING_DIR}/RhiresD_step1_latlon.nc"
 ref_grid_tas = f"{config.DATASETS_TRAINING_DIR}/TabsD_step1_latlon.nc"
 
-elevation_path = f"{config.BASE_DIR}/sasthana/Downscaling/GCM_pipeline/elevation.tif"
-with rasterio.open(elevation_path) as src:
-    elevation_array = src.read(1).astype(np.float32)
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+#Unique identifier for model runs. Same scenario same id runs fed together. 
+def get_id(path, var_prefix):
+    fname = os.path.basename(path)
+    return fname.replace(f"{var_prefix}_day_", "")
+
+config_dict = {
+    'variables': {
+        'input': {'precip': 'pr', 'temp': 'tas'},
+        'target': {'precip': 'pr', 'temp': 'tas'}
+    },
+    'preprocessing': {'nan_to_num': True, 'nan_value': 0.0}
+}
+
+
+#----------------------------------------------------------------------#
 
 with open(f"{config.DATASETS_TRAINING_DIR}/RhiresD_scaling_params.json", 'r') as f:
     pr_params = json.load(f)
@@ -78,8 +102,14 @@ def denorm_temp(x, params):
     return x * params['std'] + params['mean']
 
 
+#Elevation 
 
 
+elevation_path = f"{config.BASE_DIR}/sasthana/Downscaling/GCM_pipeline/elevation.tif"
+with rasterio.open(elevation_path) as src:
+    elevation_array = src.read(1).astype(np.float32)
+
+#----------------------------------------------------------------------#
 
 
 
@@ -98,7 +128,6 @@ unet_regr_ckpt = torch.load(
 unet_regr.load_state_dict(unet_regr_ckpt, strict=False)
 unet_regr = unet_regr.to(device)
 unet_regr.eval()
-
 
 
 
@@ -157,29 +186,15 @@ ddim_ckpt = torch.load(
     f"{config.DDIM_PROJ_PATH}/trained_ckpts/12km/DDIM_checkpoint_L1_cosine_schedule_loss_parameterisation_v.ckpt",
     map_location=device
 )
+
+
 ddim.load_state_dict(ddim_ckpt["state_dict"], strict=False)
 ddim = ddim.to(device)
 ddim.eval()
 sampler = DDIMSampler(ddim, device=device)
 
 
-
-
-
-
-
-
-def get_id(path, var_prefix):
-    fname = os.path.basename(path)
-    return fname.replace(f"{var_prefix}_day_", "")
-
-config_dict = {
-    'variables': {
-        'input': {'precip': 'pr', 'temp': 'tas'},
-        'target': {'precip': 'pr', 'temp': 'tas'}
-    },
-    'preprocessing': {'nan_to_num': True, 'nan_value': 0.0}
-}
+#----------------------------------------------------------------------#
 
 
 
@@ -191,191 +206,210 @@ config_dict = {
 
 
 if __name__ == "__main__":
+
+
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--start_year", type=int, required=True, help="Start year")
     parser.add_argument("--end_year", type=int, required=True, help="End year")
-    parser.add_argument("--mode", type=str, choices=["unet", "concat_unet", "ddim", "concat_ddim"], required=True)
-    parser.add_argument("--ensemble", type=str, choices=["EQM", "dOTC", "CDFT"], required=True, help="Ensemble name (EQM, dOTC, or CDFT)")
+    parser.add_argument("--mode", type=str, choices=["bicubic", "unet", "ddim"], required=True) #modes for models
+    parser.add_argument("--BC", type=str, choices=["EQM", "dOTC", "CDFT"], required=True, help="BC name (EQM, dOTC, or CDFT)")
     args = parser.parse_args()
 
-    # Use ensemble argument to set directories
-    tas_dir = f"{config.BIAS_CORRECTED_DIR_RCP85}/{args.ensemble}"
-    pr_dir = f"{config.BIAS_CORRECTED_DIR_RCP85}/{args.ensemble}"
-    bicubic_dir = f"{config.BIAS_CORRECTED_DIR_RCP85}/{args.ensemble}"
+#----------------------------------------------------------------------#
+
+
+
+    #dir for BC ensembles
+    tas_dir = f"{config.BIAS_CORRECTED_DIR_RCP85}/{args.BC}"
+    pr_dir = f"{config.BIAS_CORRECTED_DIR_RCP85}/{args.BC}"
+    bicubic_dir = f"{config.BIAS_CORRECTED_DIR_RCP85}/{args.BC}"
 
     tas_files = [os.path.join(tas_dir, f) for f in os.listdir(tas_dir) if f.startswith("tas_day") and f.endswith(".nc")]
+
+
     pr_files = [os.path.join(pr_dir, f) for f in os.listdir(pr_dir) if f.startswith("pr_day") and f.endswith(".nc")]
-    pr_dict = {get_id(f, "pr"): f for f in pr_files}
+
+
+
+    pr_dict = {get_id(f, "pr"): f for f in pr_files} 
+
+
+#----------------------------------------------------------------------#
 
 
 
 
+    #bicubically interpolating EUROCORDEX_11_RCP8.5_BC
 
 
-    if args.mode == "unet":
-        for tas_path in tas_files:
-            tas_id = get_id(tas_path, "tas")
-            pr_path = pr_dict.get(tas_id, None)
+    if args.mode == "bicubic": 
+        for tas_path in tas_files: 
+            tas_id= get_id(tas_path,"tas")
+            pr_path= pr_dict.get(tas_id, None) #unique id for corr pr file
+
+
+            #CHECK . 
+
             if pr_path is None:
-                print(f"No matching pr file for {tas_path}")
+                print("Need matching pr file to proceed")
                 continue
 
-            print(f"Processing {tas_path} and {pr_path}")
 
-            bicubic_tas_path = os.path.join(
-                bicubic_dir, f"tas_bicubic_{tas_id}"
-            )
-            bicubic_pr_path = os.path.join(
-                bicubic_dir, f"pr_bicubic_{get_id(pr_path, 'pr')}"
-            )
-
-            bicubic_tasks = []
-
-
-
+            bicubic_tas_path = os.path.join(bicubic_dir, f"tas_bicubic_{tas_id}")
+            bicubic_pr_path= os.path.join(bicubic_dir, f"pr_bicubic_{get_id(pr_path,'pr')}")
 
             with concurrent.futures.ThreadPoolExecutor() as executor:
+                tasks=[]
                 if not os.path.exists(bicubic_tas_path):
-                    print(f"Running CDO bicubic interpolation for {tas_path}")
-                    bicubic_tasks.append(executor.submit(run_cdo, [
-                        "cdo", "remapbic," + ref_grid_tas, tas_path, bicubic_tas_path
-                    ]))
+                    print(f"bicubically interpolating {tas_path}")
+
+                    tasks.append(executor.submit(run_cdo, ["cdo", "remapbic," + ref_grid_tas, 
+                                                           tas_path, 
+                                                           bicubic_tas_path]))
+                    
                 else:
-                    print(f"Bicubic tas already exists: {bicubic_tas_path}")
+                    print(f"{bicubic_tas_path} exists already")
+
 
                 if not os.path.exists(bicubic_pr_path):
-                    print(f"Running CDO bicubic interpolation for {pr_path}")
-                    bicubic_tasks.append(executor.submit(run_cdo, [
-                        "cdo", "remapbic," + ref_grid_pr, pr_path, bicubic_pr_path
-                    ]))
-                else:
-                    print(f"Bicubic pr already exists: {bicubic_pr_path}")
-                concurrent.futures.wait(bicubic_tasks)
+                    print(f"Bicubically interpolating {pr_path}")
 
+                    tasks.append(executor.submit(run_cdo, ["cdo", "remapbic," + ref_grid_pr, 
+                                                           pr_path, 
+                                                           bicubic_pr_path]))
+                    
+
+                else:
+                    print(f"{bicubic_pr_path} exists already")
+                
+                concurrent.futures.wait(tasks) #for threads to complete. 
+
+    
+#----------------------------------------------------------------------#
+
+
+
+    elif args.mode == "unet":
+        batch_size= 16
+
+        #for a 6 node job,, blocks in parallel. 
+
+
+        
+        for tas_path in tas_files: #model identifiers. 
+            tas_id= get_id(tas_path,"tas")
+            pr_path= pr_dict.get(tas_id, None) #unique id for corr pr
+
+
+            bicubic_tas_path = os.path.join(bicubic_dir, f"tas_bicubic_{tas_id}")
+            bicubic_pr_path= os.path.join(bicubic_dir, f"pr_bicubic_{get_id(pr_path,'pr')}")
+
+            #For Unet and DDIM inputs. 
             tas_path = bicubic_tas_path
             pr_path = bicubic_pr_path
 
-            print(f"Processing {tas_path} and {pr_path}")
 
-            input_ds = {
-                'precip': xr.open_dataset(pr_path),
-                'temp': xr.open_dataset(tas_path)
-            }
-            target_ds = {
-                'precip': xr.open_dataset(pr_path),
-                'temp': xr.open_dataset(tas_path)
-            }
-
-            time_start = f"{args.start_year}-01-01"
-            time_end = f"{args.end_year}-12-31"
-            for v in input_ds:
-                input_ds[v] = input_ds[v].sel(time=slice(time_start, time_end))
-            for v in target_ds:
-                target_ds[v] = target_ds[v].sel(time=slice(time_start, time_end))
-
-            ds = DownscalingDataset(input_ds, target_ds, config_dict, elevation_path=elevation_array)
-
-            input_tensor, _ = ds[0]
-            spatial_shape = input_tensor.shape[1:]
-            times = input_ds['temp']['time'].values
-            N = len(ds)
-            unet_all = np.empty((N, 2, *spatial_shape), dtype=np.float32)
-            params_list = [pr_params, temp_params]
-
-            var_names = ["precip", "temp"]
-            N_vals = np.arange(spatial_shape[0])
-            E_vals = np.arange(spatial_shape[1])
-            lat2d, lon2d = None, None
-
+            input_ds= {"precip": xr.open_dataset(pr_path),
+                       "temp": xr.open_dataset(tas_path)}
             
+            target_ds= {"precip": xr.open_dataset(pr_path),
+                        "temp": xr.open_dataset(tas_path)}
+            
+            time_start= f"{args.start_year}-01-01"
+            time_end= f"{args.end_year}-12-31" #Daily frames
+            for var in input_ds:
+                input_ds[var]= input_ds[var].sel(time=slice(time_start, time_end))
+            for var in target_ds: #Not used,, just for clarity
+                target_ds[var]= target_ds[var].sel(time=slice(time_start, time_end))
+
+
+#DataLoader
+            ds= DownscalingDataset(input_ds, target_ds, config_dict, elevation_path= elevation_array)
+            N=len(ds)
+            print("Dataloader prepared with shape: ", N)
+
+            input_tensor,_= ds[0]
+            spatial_shape= input_tensor.shape[1:]
+            print("Spatial shape: ", spatial_shape)
+            times= input_ds["temp"]["time"].values
+
+            unet_all= np.empty((N, 2, *spatial_shape), dtype=np.float32)
+
+            params_list= [pr_params, temp_params]
+            var_names= ["precip", "temp"]
+
+            lat2d, lon2d = None, None #For handling [N,E] and [lat, lon] both depemding on dataset,,passed DEBUG
             if ref_lat.ndim == 2 and ref_lon.ndim == 2:
                 lat2d, lon2d = ref_lat, ref_lon
             elif ref_lat.ndim == 1 and ref_lon.ndim == 1:
                 lat2d, lon2d = np.meshgrid(ref_lat, ref_lon, indexing="ij")
             encoding = {}
 
-            batch_size = 16
 
+            #Inf loop Unet
 
+            for batch_start in tqdm(range(0,N, batch_size), desc="UNet Inference for RCP 8.5"):
+                batch_end= min(batch_start + batch_size, N)
+                batch_inputs=[]
 
-            for batch_start in tqdm(range(0, N, batch_size), desc=f"Downscaling {os.path.basename(tas_path)}"):
-                batch_end = min(batch_start + batch_size, N)
-                batch_inputs = []
                 for idx in range(batch_start, batch_end):
-                    input_tensor, _ = ds[idx]
+                    input_tensor, _= ds[idx]
                     batch_inputs.append(input_tensor)
-                batch_tensor = torch.stack(batch_inputs).to(device)
+                batch_tensor= torch.stack(batch_inputs).to(device)
                 with torch.no_grad():
-                    unet_pred = unet_regr(batch_tensor)
-                    unet_pred_np = unet_pred.cpu().numpy()
-                    unet_pred_denorm = np.empty_like(unet_pred_np)
-                    for i, params in enumerate(params_list):
-                        if i == 0:
-                            unet_pred_denorm[:, i] = denorm_pr(unet_pred_np[:, i], pr_params)
+                    unet_pred= unet_regr(batch_tensor)
+                    unet_pred_np= unet_pred.cpu().numpy()
+                    unet_pred_denorm= np.empty_like(unet_pred_np)
+
+
+                    for varindex, var in enumerate(var_names):
+                        if var == "precip":
+                            unet_pred_denorm[:, varindex] = denorm_pr(unet_pred_np[:, varindex], pr_params)
+                        elif var == "temp":
+                            unet_pred_denorm[:, varindex] = denorm_temp(unet_pred_np[:, varindex], temp_params)
                         else:
-                            unet_pred_denorm[:, i] = denorm_temp(unet_pred_np[:, i], params)
+                            raise ValueError(f"Unknown variable name: {var}")
                     unet_all[batch_start:batch_end] = unet_pred_denorm
 
-            unet_preds_np = np.transpose(unet_all, (0, 2, 3, 1))
+            unet_preds_np= np.transpose(unet_all, (0, 2, 3, 1)) # [time, N, E, var]
 
-            ds_unet = xr.Dataset(
-                {
-                    var: (("time", "N", "E"), unet_preds_np[:, :, :, i])
-                    for i, var in enumerate(var_names)
-                },
-                coords={
-                    "time": times,
-                    "N": N_vals,
-                    "E": E_vals,
-                    "lat": (("N", "E"), lat2d) if lat2d is not None else None,
-                    "lon": (("N", "E"), lon2d) if lon2d is not None else None,
-                }
-            )
+            ds_unet= xr.Dataset({
 
-            out_path_unet = f"ALP-FINE_8.5/{args.ensemble}/UNet_RCP85_{args.start_year}-{args.end_year}_tas_{get_id(pr_path, 'pr')}"
-            ds_unet.to_netcdf(out_path_unet, encoding=encoding)
-            print(f"UNet Op saved to {out_path_unet}")
+                var: (("time", "N", "E"), 
+                      unet_preds_np[:, :, :, i]) for i, var in enumerate(var_names)
+            },
+            
+            coords= {"time": times,
+                     "lat": (("N", "E"), lat2d) if lat2d is not None else None, #Mesh 
+                     "lon": (("N", "E"), lon2d) if lon2d is not None else None,
+                     } )
+            
+        out_path_unet = f"ALP-FINE_8.5/{args.ensemble}/UNet_RCP85_{args.start_year}-{args.end_year}_tas_{get_id(pr_path, 'pr')}"
+        ds_unet.to_netcdf(out_path_unet, encoding=encoding)
+        print(f"UNet O/P saved as {out_path_unet}")
 
-            for ds_ in input_ds.values():
-                ds_.close()
-            for ds_ in target_ds.values():
-                ds_.close()
-
-
-            if args.end_year == 2099:
-                decades = [
-                    (1971, 1990), (1991, 2010), (2011, 2030),
-                    (2031, 2050), (2051, 2070), (2071, 2099)
-                ]
-                for pr_id in pr_dict:
-                    all_exist = True
-                    for start, end in decades:
-                        fname = f"ALP-FINE_8.5/{args.ensemble}/UNet_RCP85_{start}-{end}_tas_{pr_id}"
-                        if not os.path.exists(fname):
-                            print(f"Missing decadal file: {fname}")
-                            all_exist = False
-                    out_path = f"ALP-FINE_8.5/{args.ensemble}/UNet_RCP85_1971-2099_tas_{pr_id}_concat.nc"
-                    if all_exist:
-                        if os.path.exists(out_path):
-                            print(f"Concatenated file {out_path} already exists, skipping.")
-                            continue
-                        pattern = f"ALP-FINE_8.5/{args.ensemble}/UNet_RCP85_*_tas_{pr_id}"
-                        cat_file(pattern, out_path)
-                    else:
-                        print(f"Not all decadal files present for {pr_id}, skipping concatenation.")
+        for ds_ in input_ds.values():
+            ds_.close()
+        for ds_ in target_ds.values():
+            ds_.close()
 
 
 
 
+            
 
 
 
+        
 
+
+#----------------------------------------------------------------------#
 
     elif args.mode == "ddim":
 
-
         for tas_path in tas_files:
+            batch_size = 1
             tas_id = get_id(tas_path, "tas")
             pr_path = pr_dict.get(tas_id, None)
             if pr_path is None:
@@ -384,7 +418,7 @@ if __name__ == "__main__":
 
             print(f"Processing {tas_path} and {pr_path}")
 
-            out_path_ddim = f"ALP-FINE_8.5/{args.ensemble}/DDIM_5samples_RCP85_{args.start_year}-{args.end_year}_tas_{get_id(pr_path, 'pr')}"
+            out_path_ddim = f"ALP-FINE_8.5/{args.ensemble}/DDIM_{num_samples}samples_RCP85_{args.start_year}-{args.end_year}_tas_{get_id(pr_path, 'pr')}"
             if os.path.exists(out_path_ddim):
                 print(f"DDIM file already exists for {pr_path}, skipping sampling.")
                 continue
@@ -398,25 +432,9 @@ if __name__ == "__main__":
 
             bicubic_tasks = []
             with concurrent.futures.ThreadPoolExecutor() as executor:
-                if not os.path.exists(bicubic_tas_path):
-                    print(f"Running CDO bicubic interpolation for {tas_path}")
-                    bicubic_tasks.append(executor.submit(run_cdo, [
-                        "cdo", "remapbic," + ref_grid_tas, tas_path, bicubic_tas_path
-                    ]))
-                else:
-                    print(f"Bicubic tas already exists: {bicubic_tas_path}")
 
-                if not os.path.exists(bicubic_pr_path):
-                    print(f"Running CDO bicubic interpolation for {pr_path}")
-                    bicubic_tasks.append(executor.submit(run_cdo, [
-                        "cdo", "remapbic," + ref_grid_pr, pr_path, bicubic_pr_path
-                    ]))
-                else:
-                    print(f"Bicubic pr already exists: {bicubic_pr_path}")
-                concurrent.futures.wait(bicubic_tasks)
-
-            tas_path = bicubic_tas_path
-            pr_path = bicubic_pr_path
+                tas_path = bicubic_tas_path
+                pr_path = bicubic_pr_path
 
             print(f"Processing {tas_path} and {pr_path}")
 
@@ -431,10 +449,12 @@ if __name__ == "__main__":
 
             time_start = f"{args.start_year}-01-01"
             time_end = f"{args.end_year}-12-31"
-            for v in input_ds:
-                input_ds[v] = input_ds[v].sel(time=slice(time_start, time_end))
-            for v in target_ds:
-                target_ds[v] = target_ds[v].sel(time=slice(time_start, time_end))
+
+
+            for var in input_ds:
+                input_ds[var] = input_ds[var].sel(time=slice(time_start, time_end))
+            for var in target_ds:
+                target_ds[var] = target_ds[var].sel(time=slice(time_start, time_end))
 
             ds = DownscalingDataset(input_ds, target_ds, config_dict, elevation_path=elevation_array)
 
@@ -442,31 +462,39 @@ if __name__ == "__main__":
             spatial_shape = input_tensor.shape[1:]
             times = input_ds['temp']['time'].values
             N = len(ds)
-            ddim_all = np.empty((N, num_samples, 2, *spatial_shape), dtype=np.float32)
-            params_list = [pr_params, temp_params]
 
+
+            ddim_all = np.empty((N, num_samples, 2, *spatial_shape), dtype=np.float32)
             var_names = ["precip", "temp"]
-            N_vals = np.arange(spatial_shape[0])
-            E_vals = np.arange(spatial_shape[1])
+
             lat2d, lon2d = None, None
+
             if ref_lat.ndim == 2 and ref_lon.ndim == 2:
                 lat2d, lon2d = ref_lat, ref_lon
             elif ref_lat.ndim == 1 and ref_lon.ndim == 1:
                 lat2d, lon2d = np.meshgrid(ref_lat, ref_lon, indexing="ij")
             encoding = {}
 
-            batch_size = 1
             for batch_start in tqdm(range(0, N, batch_size), desc="DDIM Sampling"):
+
                 batch_end = min(batch_start + batch_size, N)
                 batch_inputs = []
+
+
+
                 for idx in range(batch_start, batch_end):
                     input_tensor, _ = ds[idx]
                     batch_inputs.append(input_tensor)
+
                 batch_tensor = torch.stack(batch_inputs).to(device)
+
+
                 with torch.no_grad():
+
                     unet_pred = unet_regr(batch_tensor)
                     context = [(unet_pred, None)]
                     sample_shape = unet_pred.shape[1:]
+
                     for j in range(num_samples):
                         torch.manual_seed(manual_seed + j)
                         np.random.seed(manual_seed + j)
@@ -481,21 +509,27 @@ if __name__ == "__main__":
                             x_T=z,
                             schedule="cosine"
                         )
+
                         final_pred = unet_pred + residual
                         final_pred_np = final_pred.cpu().numpy()
+
+
                         ddim_pred_denorm = np.empty_like(final_pred_np)
-                        for i, params in enumerate(params_list):
-                            if i == 0:
-                                ddim_pred_denorm[:, i] = denorm_pr(final_pred_np[:, i], pr_params)
+
+                        for varindex, var in enumerate(var_names):
+                            if var == "precip":
+                                ddim_pred_denorm[:, varindex] = denorm_pr(final_pred_np[:, varindex], pr_params)
+                            elif var == "temp":
+                                ddim_pred_denorm[:, varindex] = denorm_temp(final_pred_np[:, varindex], temp_params)
                             else:
-                                ddim_pred_denorm[:, i] = denorm_temp(final_pred_np[:, i], params)
+                                raise ValueError(f"Unknown variable name: {var}")
                         ddim_all[batch_start:batch_end, j] = ddim_pred_denorm
 
             ddim_preds_np = np.transpose(ddim_all, (0, 1, 3, 4, 2))
 
             ds_ddim = xr.Dataset(
                 {var: (("time", "sample", "N", "E"), ddim_preds_np[:, :, :, :, i])
-                 for i, var in enumerate(var_names)},
+                for i, var in enumerate(var_names)},
                 coords={"time": times,
                         "sample": np.arange(num_samples),
                         "lat": (("N", "E"), lat2d) if lat2d is not None else None,
@@ -513,29 +547,3 @@ if __name__ == "__main__":
 
 
 
-
-
-        if args.end_year == 2099:
-            decades = [
-                (1971, 1990), (1991, 2010), (2011, 2030),
-                (2031, 2050), (2051, 2070), (2071, 2099)
-            ]
-            for pr_id in pr_dict:
-                all_exist = True
-                decadal_files = []
-                for start, end in decades:
-                    fname = f"ALP-FINE_8.5/{args.ensemble}/DDIM_5samples_RCP85_{start}-{end}_tas_{pr_id}"
-                    if not os.path.exists(fname):
-                        print(f"Missing decadal file: {fname}")
-                        all_exist = False
-                    else:
-                        decadal_files.append(fname)
-                if all_exist:
-                    pattern = f"ALP-FINE_8.5/{args.ensemble}/DDIM_5samples_RCP85_*_tas_{pr_id}"
-                    out_path = f"ALP-FINE_8.5/{args.ensemble}/DDIM_5samples_RCP85_1971-2099_tas_{pr_id}_concat.nc"
-                    if os.path.exists(out_path):
-                        print(f"Concatenated file {out_path} already exists, skipping.")
-                        continue
-                    cat_file(pattern, out_path)
-                else:
-                    print(f"Not all decadal files present for {pr_id}, skipping concatenation.")
