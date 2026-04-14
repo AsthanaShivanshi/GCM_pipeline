@@ -13,6 +13,8 @@ import subprocess
 import concurrent.futures
 
 
+
+
 sys.path.append(config.DDIM_PROJ_PATH)
 sys.path.append(config.LDM_PROJ_PATH)
 sys.path.append(config.DM_DIR)
@@ -63,7 +65,7 @@ manual_seed=124
 
 #----------------------------------------------------------------------#
 
-
+#Files and identifiers
 ref_ds_temp = xr.open_dataset(f"{config.DATASETS_TRAINING_DIR}/TabsD_target_train_scaled.nc")
 ref_lat = ref_ds_temp["lat"].values
 ref_lon = ref_ds_temp["lon"].values
@@ -71,6 +73,15 @@ ref_ds_precip = xr.open_dataset(f"{config.DATASETS_TRAINING_DIR}/RhiresD_target_
 
 ref_grid_pr = f"{config.DATASETS_TRAINING_DIR}/RhiresD_step1_latlon.nc"
 ref_grid_tas = f"{config.DATASETS_TRAINING_DIR}/TabsD_step1_latlon.nc"
+
+ref_grid_pr_ds = xr.open_dataset(ref_grid_pr)
+ref_grid_tas_ds = xr.open_dataset(ref_grid_tas)
+
+#Nan masks for use later 
+mask_pr = np.isnan(ref_grid_pr_ds['RhiresD'].values)
+mask_tas = np.isnan(ref_grid_tas_ds['TabsD'].values)
+ref_grid_pr_ds.close()
+ref_grid_tas_ds.close()
 
 
 
@@ -374,6 +385,18 @@ if __name__ == "__main__":
 
             unet_preds_np= np.transpose(unet_all, (0, 2, 3, 1)) # [time, N, E, var]
 
+
+
+
+            #Masking nans as in target for consistency. 
+            for i, var in enumerate(var_names):
+                if var == "precip":
+                    unet_preds_np[:, :, :, i][mask_pr] = np.nan
+                elif var == "temp":
+                    unet_preds_np[:, :, :, i][mask_tas] = np.nan
+
+
+
             ds_unet= xr.Dataset({
 
                 var: (("time", "N", "E"), 
@@ -409,7 +432,7 @@ if __name__ == "__main__":
     elif args.mode == "ddim":
 
         for tas_path in tas_files:
-            batch_size = 1
+            batch_size = 10
             tas_id = get_id(tas_path, "tas")
             pr_path = pr_dict.get(tas_id, None)
             if pr_path is None:
@@ -526,6 +549,15 @@ if __name__ == "__main__":
                         ddim_all[batch_start:batch_end, j] = ddim_pred_denorm
 
             ddim_preds_np = np.transpose(ddim_all, (0, 1, 3, 4, 2))
+
+
+            #Masking nans as in target for consistency 
+
+            for i, var in enumerate(var_names):
+                if var == "precip":
+                    ddim_preds_np[:, :, :, :, i][..., mask_pr] = np.nan
+                elif var == "temp":
+                    ddim_preds_np[:, :, :, :, i][..., mask_tas] = np.nan
 
             ds_ddim = xr.Dataset(
                 {var: (("time", "sample", "N", "E"), ddim_preds_np[:, :, :, :, i])

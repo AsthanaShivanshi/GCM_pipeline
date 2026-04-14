@@ -8,7 +8,7 @@
 #SBATCH --mem=128G
 #SBATCH --partition=gpu
 #SBATCH --gres=gpu:1
-#SBATCH --array=0-5  ##decadal jobs... 6,,..
+#SBATCH --array=0-5  ##decadal jobs... 6,,..##gpu-h100 can be an alternative 
 
 
 #This script to be executed only after SR_UNet.sh is complete for both bicubic and unet modes. 
