@@ -48,6 +48,12 @@ def cat_file(pattern, out_path, dim="time"):
 
 #----------------------------------------------------------------------#
 
+num_samples = 11 # Deterministic for fixed random seed
+eta = 0.0       # DDIM
+S = 30         # Number of DDIM steps
+manual_seed=124
+
+
 decades= [(1971, 1980), 
                   (1981,1990), 
                   (1991,2000),
@@ -64,10 +70,6 @@ decades= [(1971, 1980),
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-num_samples = 11 # Deterministic for fixed random seed
-eta = 0.0       # DDIM
-S = 30         # Number of DDIM steps
-manual_seed=124
 
 
 #----------------------------------------------------------------------#
@@ -114,6 +116,12 @@ with open(f"{config.DATASETS_TRAINING_DIR}/RhiresD_scaling_params.json", 'r') as
     pr_params = json.load(f)
 with open(f"{config.DATASETS_TRAINING_DIR}/TabsD_scaling_params.json", 'r') as f:
     temp_params = json.load(f)
+
+def norm_pr(x, pr_params):
+    return (np.log(x + pr_params['epsilon']) - pr_params['mean']) / pr_params['std']
+
+def norm_temp(x, params):
+    return (x - params['mean']) / params['std']
 
 def denorm_pr(x, pr_params):
     return np.exp(x * pr_params['std'] + pr_params['mean']) - pr_params['epsilon']
@@ -239,7 +247,6 @@ if __name__ == "__main__":
 #----------------------------------------------------------------------#
 
 
-
     #dir for BC ensembles
     tas_dir = f"{config.BIAS_CORRECTED_DIR_RCP85}/{args.ensemble}"
     pr_dir = f"{config.BIAS_CORRECTED_DIR_RCP85}/{args.ensemble}"
@@ -260,7 +267,7 @@ if __name__ == "__main__":
 
 
 
-    #bicubically interpolating EUROCORDEX_11_RCP8.5_BC
+    #bicubically interpolating EUROCORDEX_11_RCP2.6_BC
 
 
     if args.mode == "bicubic": 
@@ -323,8 +330,6 @@ if __name__ == "__main__":
         pr_ids  = set(get_model_id(f, "pr") for f in bicubic_pr_files)
         common_ids = sorted(tas_ids & pr_ids)
 
-
-
         for model_id in common_ids:
             print(f"Processing run: {model_id}")
             bicubic_tas_path = os.path.join(bicubic_dir, f"tas_bicubic_{model_id}.nc")
@@ -370,7 +375,11 @@ if __name__ == "__main__":
                 batch_inputs = []
                 for idx in range(batch_start, batch_end):
                     input_tensor, _ = ds[idx]
-                    batch_inputs.append(input_tensor)
+                    # --- Normalize each frame before feeding to UNet ---
+                    input_tensor_np = input_tensor.numpy()
+                    input_tensor_np[0] = norm_pr(input_tensor_np[0], pr_params)
+                    input_tensor_np[1] = norm_temp(input_tensor_np[1], temp_params)
+                    batch_inputs.append(torch.from_numpy(input_tensor_np))
                 batch_tensor = torch.stack(batch_inputs).to(device)
                 with torch.no_grad():
                     unet_pred = unet_regr(batch_tensor)
@@ -387,8 +396,6 @@ if __name__ == "__main__":
 
             unet_preds_np = np.transpose(unet_all, (0, 2, 3, 1))  # [time, N, E, var]
 
-
-
             for i, var in enumerate(var_names):
                 if var == "precip":
                     unet_preds_np[:, :, :, i] = np.where(mask_pr, np.nan, unet_preds_np[:, :, :, i])
@@ -404,7 +411,7 @@ if __name__ == "__main__":
                 }
             )
 
-            out_path_unet = f"ALP-FINE_8.5/{args.ensemble}/UNet_RCP85_{args.start_year}-{args.end_year}_tas_{model_id}.nc"
+            out_path_unet = f"ALP-FINE_8.5/{args.ensemble}/UNet/UNet_RCP85_{args.start_year}-{args.end_year}_tas_{model_id}.nc"
             ds_unet.to_netcdf(out_path_unet, encoding=encoding)
             print(f"UNet O/P saved as {out_path_unet}")
 
@@ -413,21 +420,14 @@ if __name__ == "__main__":
             for ds_ in target_ds.values():
                 ds_.close()
 
-
-
-
             print(f"Processing run: {model_id}")
-
-
-        
-
 
 #----------------------------------------------------------------------#
 
     elif args.mode == "ddim":
 
         for tas_path in tas_files:
-            batch_size = 10
+            batch_size = 16
             tas_id = get_id(tas_path, "tas")
             pr_path = pr_dict.get(tas_id, None)
             if pr_path is None:
@@ -436,7 +436,7 @@ if __name__ == "__main__":
 
             print(f"Processing {tas_path} and {pr_path}")
 
-            out_path_ddim = f"ALP-FINE_8.5/{args.ensemble}/DDIM_{num_samples}samples_RCP85_{args.start_year}-{args.end_year}_tas_{get_id(pr_path, 'pr')}"
+            out_path_ddim = f"ALP-FINE_8.5/{args.ensemble}/DDIM/DDIM_{num_samples}samples_RCP85_{args.start_year}-{args.end_year}_tas_{get_id(pr_path, 'pr')}.nc"
             if os.path.exists(out_path_ddim):
                 print(f"DDIM file already exists for {pr_path}, skipping sampling.")
                 continue
@@ -468,7 +468,6 @@ if __name__ == "__main__":
             time_start = f"{args.start_year}-01-01"
             time_end = f"{args.end_year}-12-31"
 
-
             for var in input_ds:
                 input_ds[var] = input_ds[var].sel(time=slice(time_start, time_end))
             for var in target_ds:
@@ -480,7 +479,6 @@ if __name__ == "__main__":
             spatial_shape = input_tensor.shape[1:]
             times = input_ds['temp']['time'].values
             N = len(ds)
-
 
             ddim_all = np.empty((N, num_samples, 2, *spatial_shape), dtype=np.float32)
             var_names = ["precip", "temp"]
@@ -498,14 +496,15 @@ if __name__ == "__main__":
                 batch_end = min(batch_start + batch_size, N)
                 batch_inputs = []
 
-
-
                 for idx in range(batch_start, batch_end):
                     input_tensor, _ = ds[idx]
-                    batch_inputs.append(input_tensor)
+                    # --- Normalize each frame before feeding to UNet/DDIM ---
+                    input_tensor_np = input_tensor.numpy()
+                    input_tensor_np[0] = norm_pr(input_tensor_np[0], pr_params)
+                    input_tensor_np[1] = norm_temp(input_tensor_np[1], temp_params)
+                    batch_inputs.append(torch.from_numpy(input_tensor_np))
 
                 batch_tensor = torch.stack(batch_inputs).to(device)
-
 
                 with torch.no_grad():
 
@@ -531,7 +530,6 @@ if __name__ == "__main__":
                         final_pred = unet_pred + residual
                         final_pred_np = final_pred.cpu().numpy()
 
-
                         ddim_pred_denorm = np.empty_like(final_pred_np)
 
                         for varindex, var in enumerate(var_names):
@@ -544,7 +542,6 @@ if __name__ == "__main__":
                         ddim_all[batch_start:batch_end, j] = ddim_pred_denorm
 
             ddim_preds_np = np.transpose(ddim_all, (0, 1, 3, 4, 2))
-
 
             #Masking nans as in target for consistency 
 
