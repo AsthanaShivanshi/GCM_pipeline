@@ -48,6 +48,12 @@ def cat_file(pattern, out_path, dim="time"):
 
 #----------------------------------------------------------------------#
 
+num_samples = 11 # Deterministic for fixed random seed
+eta = 0.0       # DDIM
+S = 30         # Number of DDIM steps
+manual_seed=124
+
+
 decades= [(1971, 1980), 
                   (1981,1990), 
                   (1991,2000),
@@ -64,10 +70,6 @@ decades= [(1971, 1980),
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-num_samples = 11 # Deterministic for fixed random seed
-eta = 0.0       # DDIM
-S = 30         # Number of DDIM steps
-manual_seed=124
 
 
 #----------------------------------------------------------------------#
@@ -239,11 +241,10 @@ if __name__ == "__main__":
 #----------------------------------------------------------------------#
 
 
-
     #dir for BC ensembles
-    tas_dir = f"{config.BIAS_CORRECTED_DIR_RCP85}/{args.ensemble}"
-    pr_dir = f"{config.BIAS_CORRECTED_DIR_RCP85}/{args.ensemble}"
-    bicubic_dir = f"{config.BIAS_CORRECTED_DIR_RCP85}/{args.ensemble}"
+    tas_dir = f"{config.BIAS_CORRECTED_DIR_RCP45}/{args.ensemble}"
+    pr_dir = f"{config.BIAS_CORRECTED_DIR_RCP45}/{args.ensemble}"
+    bicubic_dir = f"{config.BIAS_CORRECTED_DIR_RCP45}/{args.ensemble}"
 
     tas_files = [os.path.join(tas_dir, f) for f in os.listdir(tas_dir) if f.startswith("tas_day") and f.endswith(".nc")]
 
@@ -260,7 +261,7 @@ if __name__ == "__main__":
 
 
 
-    #bicubically interpolating EUROCORDEX_11_RCP8.5_BC
+    #bicubically interpolating EUROCORDEX_11_RCP4.5_BC
 
 
     if args.mode == "bicubic": 
@@ -404,7 +405,7 @@ if __name__ == "__main__":
                 }
             )
 
-            out_path_unet = f"ALP-FINE_8.5/{args.ensemble}/UNet_RCP85_{args.start_year}-{args.end_year}_tas_{model_id}.nc"
+            out_path_unet = f"ALP-FINE_4.5/{args.ensemble}/UNet_RCP45_{args.start_year}-{args.end_year}_tas_{model_id}.nc"
             ds_unet.to_netcdf(out_path_unet, encoding=encoding)
             print(f"UNet O/P saved as {out_path_unet}")
 
@@ -436,7 +437,7 @@ if __name__ == "__main__":
 
             print(f"Processing {tas_path} and {pr_path}")
 
-            out_path_ddim = f"ALP-FINE_8.5/{args.ensemble}/DDIM_{num_samples}samples_RCP85_{args.start_year}-{args.end_year}_tas_{get_id(pr_path, 'pr')}"
+            out_path_ddim = f"ALP-FINE_4.5/{args.ensemble}/DDIM_{num_samples}samples_RCP45_{args.start_year}-{args.end_year}_tas_{get_id(pr_path, 'pr')}"
             if os.path.exists(out_path_ddim):
                 print(f"DDIM file already exists for {pr_path}, skipping sampling.")
                 continue

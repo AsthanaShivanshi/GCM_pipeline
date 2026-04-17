@@ -6,7 +6,7 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --time=03-00:00:00
 #SBATCH --mem=128G
-#SBATCH --partition=gpu
+#SBATCH --partition=gpu-h100
 #SBATCH --gres=gpu:1
 #SBATCH --array=0-5  ##decadal jobs... 6,,..##gpu-h100 can be an alternative 
 
