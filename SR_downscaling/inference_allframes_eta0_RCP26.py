@@ -12,6 +12,8 @@ import glob
 import subprocess
 import concurrent.futures
 
+import re
+
 
 
 
@@ -98,6 +100,22 @@ config_dict = {
     'preprocessing': {'nan_to_num': True, 'nan_value': 0.0}
 }
 
+
+#For ddim case only 
+
+
+
+def find_unet_file(unet_dir, pr_path, target_year):
+    # Pattern: UNet_RCP26_YYYY-YYYY_tas_{model_id}.nc
+    model_id = get_id(pr_path, 'pr')
+    pattern = re.compile(r"UNet_RCP26_(\d{4})-(\d{4})_tas_" + re.escape(model_id))
+    for fname in os.listdir(unet_dir):
+        m = pattern.match(fname)
+        if m:
+            start, end = int(m.group(1)), int(m.group(2))
+            if start <= target_year <= end:
+                return os.path.join(unet_dir, fname)
+    return None
 
 #----------------------------------------------------------------------#
 
@@ -421,9 +439,25 @@ if __name__ == "__main__":
 
 #----------------------------------------------------------------------#
 
+
+
+    
+
+    
+
+
     elif args.mode == "ddim":
+
+        ddim_config_dict = {
+            'variables': {
+                'input': {'precip': 'precip', 'temp': 'temp'},
+                'target': {'precip': 'precip', 'temp': 'temp'}
+            },
+            'preprocessing': {'nan_to_num': True, 'nan_value': 0.0}
+        }
+
         for tas_path in tas_files:
-            batch_size = 16
+            batch_size = 32
             tas_id = get_id(tas_path, "tas")
             pr_path = pr_dict.get(tas_id, None)
             if pr_path is None:
@@ -432,23 +466,21 @@ if __name__ == "__main__":
 
             print(f"Processing {tas_path} and {pr_path}")
 
-            # Path to UNet output file (change ensemble as needed)
-            unet_ensemble = args.ensemble  # or set explicitly if needed
+            unet_ensemble = args.ensemble
             unet_dir = f"ALP-FINE_2.6/{unet_ensemble}/UNet"
-            unet_file = f"{unet_dir}/UNet_RCP26_{args.start_year}-{args.end_year}_tas_{get_id(pr_path, 'pr')}.nc"
+            unet_file = find_unet_file(unet_dir, pr_path, args.start_year)
 
-            if not os.path.exists(unet_file):
-                print(f"UNet file {unet_file} does not exist, skipping.")
+            if not unet_file or not os.path.exists(unet_file):
+                print(f"UNet file for year {args.start_year} and {pr_path} does not exist, skipping.")
                 continue
 
-            out_path_ddim = f"ALP-FINE_2.6/{args.ensemble}/DDIM/DDIM_{num_samples}samples_RCP26_{args.start_year}-{args.end_year}_tas_{get_id(pr_path, 'pr')}.nc"
+            out_path_ddim = f"ALP-FINE_2.6/{args.ensemble}/DDIM/DDIM_{num_samples}samples_RCP26_{args.start_year}-{args.end_year}_tas_{get_id(pr_path, 'pr')}"
             if os.path.exists(out_path_ddim):
                 print(f"DDIM file already exists for {pr_path}, skipping sampling.")
                 continue
 
-            # Use UNet output as input
             input_ds = xr.open_dataset(unet_file)
-            target_ds = xr.open_dataset(unet_file)  # If you need target for metrics, etc.
+            target_ds = xr.open_dataset(unet_file)
 
             time_start = f"{args.start_year}-01-01"
             time_end = f"{args.end_year}-12-31"
@@ -457,9 +489,9 @@ if __name__ == "__main__":
             target_ds = target_ds.sel(time=slice(time_start, time_end))
 
             ds = DownscalingDataset(
-                {"precip": input_ds["precip"], "temp": input_ds["temp"]},
-                {"precip": target_ds["precip"], "temp": target_ds["temp"]},
-                config_dict,
+                {"precip": input_ds, "temp": input_ds},
+                {"precip": target_ds, "temp": target_ds},
+                ddim_config_dict,
                 elevation_path=elevation_array
             )
 
@@ -467,7 +499,6 @@ if __name__ == "__main__":
             spatial_shape = input_tensor.shape[1:]
             times = input_ds['time'].values
             N = len(ds)
-
             var_names = ["precip", "temp"]
 
             lat2d, lon2d = None, None
@@ -477,7 +508,9 @@ if __name__ == "__main__":
                 lat2d, lon2d = np.meshgrid(ref_lat, ref_lon, indexing="ij")
             encoding = {}
 
-            first_write = True
+            # --- Collect all batches in memory ---
+            all_ds_ddim = []
+
             for batch_start in tqdm(range(0, N, batch_size), desc="DDIM Sampling"):
                 batch_end = min(batch_start + batch_size, N)
                 batch_inputs = []
@@ -492,9 +525,10 @@ if __name__ == "__main__":
                 with torch.no_grad():
                     unet_pred = unet_regr(batch_tensor)
                     context = [(unet_pred, None)]
-                    sample_shape = unet_pred.shape[1:]
+                    sample_shape = unet_pred.shape  # [batch, channels, N, E]
 
-                    ddim_pred_denorm_all = np.empty((batch_end - batch_start, num_samples, 2, *sample_shape[1:]), dtype=np.float32)
+                    ddim_pred_denorm_all = np.empty((batch_end - batch_start, num_samples, *sample_shape[1:]), dtype=np.float32)
+
                     for j in range(num_samples):
                         torch.manual_seed(manual_seed + j)
                         np.random.seed(manual_seed + j)
@@ -521,11 +555,9 @@ if __name__ == "__main__":
                                 raise ValueError(f"Unknown variable name: {var}")
                         ddim_pred_denorm_all[:, j] = ddim_pred_denorm
 
-                ddim_preds_np = np.transpose(ddim_pred_denorm_all, (0, 1, 3, 4, 2))
-
+                ddim_preds_np = np.transpose(ddim_pred_denorm_all, (0, 1, 3, 4, 2))  # [time, sample, N, E, var]
                 batch_times = times[batch_start:batch_end]
 
-                            
                 for i, var in enumerate(var_names):
                     if var == "precip":
                         ddim_preds_np[:, :, :, :, i] = np.where(mask_pr, np.nan, ddim_preds_np[:, :, :, :, i])
@@ -542,17 +574,13 @@ if __name__ == "__main__":
                         "lon": (("N", "E"), lon2d) if lon2d is not None else None,
                     }
                 )
-
-                write_mode = "w" if first_write else "a"
-
-                ds_ddim_batch.to_netcdf(
-                    out_path_ddim,
-                    mode=write_mode,
-                    unlimited_dims=["time"],
-                    encoding=encoding
-                )
-                first_write = False
+                all_ds_ddim.append(ds_ddim_batch)
                 ds_ddim_batch.close()
+
+            # --- Concatenate all batches and write once ---
+            ds_ddim_full = xr.concat(all_ds_ddim, dim="time")
+            ds_ddim_full.to_netcdf(out_path_ddim, encoding=encoding)
+            ds_ddim_full.close()
 
             input_ds.close()
             target_ds.close()
