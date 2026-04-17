@@ -27,7 +27,7 @@ from models.components.diff.denoiser.ddim import DDIMSampler
 from models.components.diff.conditioner import AFNOConditionerNetCascade
 from models.diff_module import DDIMResidualContextual
 
-#Purpose : Bicubically interpolating and then SR  GCM_pipeline/EUROCORDEX_11_RCP8.5_BC
+#Purpose : Bicubically interpolating and then SR  GCM_pipeline/EUROCORDEX_11_RCP2.6_BC
 #----------------------------------------------------------------------#
 
 def run_cdo(cmd):
@@ -52,21 +52,8 @@ num_samples = 11 # Deterministic for fixed random seed
 eta = 0.0       # DDIM
 S = 30         # Number of DDIM steps
 manual_seed=124
+#----------------------------------------------------------------------#
 
-
-decades= [(1971, 1980), 
-                  (1981,1990), 
-                  (1991,2000),
-                  (2001,2010),
-                  (2011,2020),
-                  (2021,2030),
-                  (2031,2040),
-                  (2041,2050),
-                  (2051,2060),
-                  (2061,2070),
-                  (2071,2080),
-                  (2081,2090),
-                  (2091,2099)] #Used in ddim bash script,, just mentioned here for clarity,, not used in the main script
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -75,6 +62,8 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 #----------------------------------------------------------------------#
 
 #Files and identifiers
+
+
 ref_ds_temp = xr.open_dataset(f"{config.DATASETS_TRAINING_DIR}/TabsD_target_train_scaled.nc")
 ref_lat = ref_ds_temp["lat"].values
 ref_lon = ref_ds_temp["lon"].values
@@ -118,7 +107,9 @@ with open(f"{config.DATASETS_TRAINING_DIR}/TabsD_scaling_params.json", 'r') as f
     temp_params = json.load(f)
 
 def norm_pr(x, pr_params):
-    return (np.log(x + pr_params['epsilon']) - pr_params['mean']) / pr_params['std']
+    x_safe = np.clip(x, 0, None) #For model non negativity of precip
+    
+    return (np.log(x_safe + pr_params['epsilon']) - pr_params['mean']) / pr_params['std']
 
 def norm_temp(x, params):
     return (x - params['mean']) / params['std']
@@ -129,6 +120,7 @@ def denorm_pr(x, pr_params):
 def denorm_temp(x, params):
     return x * params['std'] + params['mean']
 
+#----------------------------------------------------------------------#
 
 #Elevation 
 
@@ -318,7 +310,7 @@ if __name__ == "__main__":
 
 
     elif args.mode == "unet":
-        batch_size = 32
+        batch_size = 16
 
         bicubic_tas_files = [f for f in os.listdir(bicubic_dir) if f.startswith("tas_bicubic_") and f.endswith(".nc")]
         bicubic_pr_files  = [f for f in os.listdir(bicubic_dir) if f.startswith("pr_bicubic_") and f.endswith(".nc")]
@@ -395,7 +387,7 @@ if __name__ == "__main__":
                     unet_all[batch_start:batch_end] = unet_pred_denorm
 
             unet_preds_np = np.transpose(unet_all, (0, 2, 3, 1))  # [time, N, E, var]
-
+            
             for i, var in enumerate(var_names):
                 if var == "precip":
                     unet_preds_np[:, :, :, i] = np.where(mask_pr, np.nan, unet_preds_np[:, :, :, i])
@@ -415,17 +407,21 @@ if __name__ == "__main__":
             ds_unet.to_netcdf(out_path_unet, encoding=encoding)
             print(f"UNet O/P saved as {out_path_unet}")
 
+
+
+
+
             for ds_ in input_ds.values():
                 ds_.close()
             for ds_ in target_ds.values():
                 ds_.close()
+
 
             print(f"Processing run: {model_id}")
 
 #----------------------------------------------------------------------#
 
     elif args.mode == "ddim":
-
         for tas_path in tas_files:
             batch_size = 16
             tas_id = get_id(tas_path, "tas")
@@ -436,82 +432,69 @@ if __name__ == "__main__":
 
             print(f"Processing {tas_path} and {pr_path}")
 
+            # Path to UNet output file (change ensemble as needed)
+            unet_ensemble = args.ensemble  # or set explicitly if needed
+            unet_dir = f"ALP-FINE_2.6/{unet_ensemble}/UNet"
+            unet_file = f"{unet_dir}/UNet_RCP26_{args.start_year}-{args.end_year}_tas_{get_id(pr_path, 'pr')}.nc"
+
+            if not os.path.exists(unet_file):
+                print(f"UNet file {unet_file} does not exist, skipping.")
+                continue
+
             out_path_ddim = f"ALP-FINE_2.6/{args.ensemble}/DDIM/DDIM_{num_samples}samples_RCP26_{args.start_year}-{args.end_year}_tas_{get_id(pr_path, 'pr')}.nc"
             if os.path.exists(out_path_ddim):
                 print(f"DDIM file already exists for {pr_path}, skipping sampling.")
                 continue
 
-            bicubic_tas_path = os.path.join(
-                bicubic_dir, f"tas_bicubic_{tas_id}"
-            )
-            bicubic_pr_path = os.path.join(
-                bicubic_dir, f"pr_bicubic_{get_id(pr_path, 'pr')}"
-            )
-
-            bicubic_tasks = []
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-
-                tas_path = bicubic_tas_path
-                pr_path = bicubic_pr_path
-
-            print(f"Processing {tas_path} and {pr_path}")
-
-            input_ds = {
-                'precip': xr.open_dataset(pr_path),
-                'temp': xr.open_dataset(tas_path)
-            }
-            target_ds = {
-                'precip': xr.open_dataset(pr_path),
-                'temp': xr.open_dataset(tas_path)
-            }
+            # Use UNet output as input
+            input_ds = xr.open_dataset(unet_file)
+            target_ds = xr.open_dataset(unet_file)  # If you need target for metrics, etc.
 
             time_start = f"{args.start_year}-01-01"
             time_end = f"{args.end_year}-12-31"
 
-            for var in input_ds:
-                input_ds[var] = input_ds[var].sel(time=slice(time_start, time_end))
-            for var in target_ds:
-                target_ds[var] = target_ds[var].sel(time=slice(time_start, time_end))
+            input_ds = input_ds.sel(time=slice(time_start, time_end))
+            target_ds = target_ds.sel(time=slice(time_start, time_end))
 
-            ds = DownscalingDataset(input_ds, target_ds, config_dict, elevation_path=elevation_array)
+            ds = DownscalingDataset(
+                {"precip": input_ds["precip"], "temp": input_ds["temp"]},
+                {"precip": target_ds["precip"], "temp": target_ds["temp"]},
+                config_dict,
+                elevation_path=elevation_array
+            )
 
             input_tensor, _ = ds[0]
             spatial_shape = input_tensor.shape[1:]
-            times = input_ds['temp']['time'].values
+            times = input_ds['time'].values
             N = len(ds)
 
-            ddim_all = np.empty((N, num_samples, 2, *spatial_shape), dtype=np.float32)
             var_names = ["precip", "temp"]
 
             lat2d, lon2d = None, None
-
             if ref_lat.ndim == 2 and ref_lon.ndim == 2:
                 lat2d, lon2d = ref_lat, ref_lon
             elif ref_lat.ndim == 1 and ref_lon.ndim == 1:
                 lat2d, lon2d = np.meshgrid(ref_lat, ref_lon, indexing="ij")
             encoding = {}
 
+            first_write = True
             for batch_start in tqdm(range(0, N, batch_size), desc="DDIM Sampling"):
-
                 batch_end = min(batch_start + batch_size, N)
                 batch_inputs = []
-
                 for idx in range(batch_start, batch_end):
                     input_tensor, _ = ds[idx]
-                    # --- Normalize each frame before feeding to UNet/DDIM ---
                     input_tensor_np = input_tensor.numpy()
                     input_tensor_np[0] = norm_pr(input_tensor_np[0], pr_params)
                     input_tensor_np[1] = norm_temp(input_tensor_np[1], temp_params)
                     batch_inputs.append(torch.from_numpy(input_tensor_np))
-
                 batch_tensor = torch.stack(batch_inputs).to(device)
 
                 with torch.no_grad():
-
                     unet_pred = unet_regr(batch_tensor)
                     context = [(unet_pred, None)]
                     sample_shape = unet_pred.shape[1:]
 
+                    ddim_pred_denorm_all = np.empty((batch_end - batch_start, num_samples, 2, *sample_shape[1:]), dtype=np.float32)
                     for j in range(num_samples):
                         torch.manual_seed(manual_seed + j)
                         np.random.seed(manual_seed + j)
@@ -526,12 +509,9 @@ if __name__ == "__main__":
                             x_T=z,
                             schedule="cosine"
                         )
-
                         final_pred = unet_pred + residual
                         final_pred_np = final_pred.cpu().numpy()
-
                         ddim_pred_denorm = np.empty_like(final_pred_np)
-
                         for varindex, var in enumerate(var_names):
                             if var == "precip":
                                 ddim_pred_denorm[:, varindex] = denorm_pr(final_pred_np[:, varindex], pr_params)
@@ -539,35 +519,40 @@ if __name__ == "__main__":
                                 ddim_pred_denorm[:, varindex] = denorm_temp(final_pred_np[:, varindex], temp_params)
                             else:
                                 raise ValueError(f"Unknown variable name: {var}")
-                        ddim_all[batch_start:batch_end, j] = ddim_pred_denorm
+                        ddim_pred_denorm_all[:, j] = ddim_pred_denorm
 
-            ddim_preds_np = np.transpose(ddim_all, (0, 1, 3, 4, 2))
+                ddim_preds_np = np.transpose(ddim_pred_denorm_all, (0, 1, 3, 4, 2))
 
-            #Masking nans as in target for consistency 
+                batch_times = times[batch_start:batch_end]
 
-            for i, var in enumerate(var_names):
-                if var == "precip":
-                    ddim_preds_np[:, :, :, :, i] = np.where(mask_pr, np.nan, ddim_preds_np[:, :, :, :, i])
-                elif var == "temp":
-                    ddim_preds_np[:, :, :, :, i] = np.where(mask_tas, np.nan, ddim_preds_np[:, :, :, :, i])
+                            
+                for i, var in enumerate(var_names):
+                    if var == "precip":
+                        ddim_preds_np[:, :, :, :, i] = np.where(mask_pr, np.nan, ddim_preds_np[:, :, :, :, i])
+                    elif var == "temp":
+                        ddim_preds_np[:, :, :, :, i] = np.where(mask_tas, np.nan, ddim_preds_np[:, :, :, :, i])
 
-            ds_ddim = xr.Dataset(
-                {var: (("time", "sample", "N", "E"), ddim_preds_np[:, :, :, :, i])
-                for i, var in enumerate(var_names)},
-                coords={"time": times,
+                ds_ddim_batch = xr.Dataset(
+                    {var: (("time", "sample", "N", "E"), ddim_preds_np[:, :, :, :, i])
+                     for i, var in enumerate(var_names)},
+                    coords={
+                        "time": batch_times,
                         "sample": np.arange(num_samples),
                         "lat": (("N", "E"), lat2d) if lat2d is not None else None,
                         "lon": (("N", "E"), lon2d) if lon2d is not None else None,
-                        }
-            )
+                    }
+                )
 
-            ds_ddim.to_netcdf(out_path_ddim, encoding=encoding)
+                write_mode = "w" if first_write else "a"
 
-            for ds_ in input_ds.values():
-                ds_.close()
-            for ds_ in target_ds.values():
-                ds_.close()
+                ds_ddim_batch.to_netcdf(
+                    out_path_ddim,
+                    mode=write_mode,
+                    unlimited_dims=["time"],
+                    encoding=encoding
+                )
+                first_write = False
+                ds_ddim_batch.close()
 
-
-
-
+            input_ds.close()
+            target_ds.close()

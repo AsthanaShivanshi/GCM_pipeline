@@ -118,7 +118,9 @@ with open(f"{config.DATASETS_TRAINING_DIR}/TabsD_scaling_params.json", 'r') as f
     temp_params = json.load(f)
 
 def norm_pr(x, pr_params):
-    return (np.log(x + pr_params['epsilon']) - pr_params['mean']) / pr_params['std']
+    x_safe = np.clip(x, 0, None) #For model non negativity of precip
+    
+    return (np.log(x_safe + pr_params['epsilon']) - pr_params['mean']) / pr_params['std']
 
 def norm_temp(x, params):
     return (x - params['mean']) / params['std']
