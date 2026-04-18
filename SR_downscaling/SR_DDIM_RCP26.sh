@@ -4,7 +4,7 @@
 #SBATCH --error=logs/SR/DDIM_SR_SR_pr_tas_RCP26_BC_AllCells_job_error-%A_%a.txt
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
-#SBATCH --time=12:00:00
+#SBATCH --time=08:00:00
 #SBATCH --mem=128G
 #SBATCH --partition=gpu
 #SBATCH --gres=gpu:1
