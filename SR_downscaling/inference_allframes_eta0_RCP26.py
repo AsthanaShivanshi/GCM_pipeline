@@ -577,7 +577,6 @@ if __name__ == "__main__":
                 all_ds_ddim.append(ds_ddim_batch)
                 ds_ddim_batch.close()
 
-            # --- Concatenate all batches and write once ---
             ds_ddim_full = xr.concat(all_ds_ddim, dim="time")
             ds_ddim_full.to_netcdf(out_path_ddim, encoding=encoding)
             ds_ddim_full.close()
