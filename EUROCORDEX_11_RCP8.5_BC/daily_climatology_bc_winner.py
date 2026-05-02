@@ -52,7 +52,7 @@ ref = ref_ds['RhiresD']
 # Mask for Swiss domain
 mask = ~np.isnan(ref.isel(time=0).values)
 
-def gridwise_perkins_skill_score_vec(a, b, nbins=50):
+def gridwise_perkins_skill_score_vec(a, b, nbins=30):
     # a, b: shape (time, lat, lon)
     lat = min(a.shape[1], b.shape[1])
     lon = min(a.shape[2], b.shape[2])
