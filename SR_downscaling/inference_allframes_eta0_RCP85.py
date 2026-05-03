@@ -50,7 +50,7 @@ def cat_file(pattern, out_path, dim="time"):
 
 #----------------------------------------------------------------------#
 
-num_samples = 6 # Deterministic for fixed random seed
+num_samples = 5 # Deterministic for fixed random seed
 eta = 0.0       # DDIM
 S = 30         # Number of DDIM steps
 manual_seed=124

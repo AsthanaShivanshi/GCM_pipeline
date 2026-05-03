@@ -1,3 +1,5 @@
+
+import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
@@ -7,14 +9,23 @@ sns.set_style("whitegrid")
 
 import glob
 from tqdm import tqdm
-
+import os
 np.Inf = np.inf
 
-from scipy.stats import gaussian_kde
+import concurrent.futures
 
 #--------------------------------------------------
 
- #.. 
+BINS = 100
+colors = [
+    "#0072B2", "#E69F00", "#009E73", "#D55E00", "#CC79A7", "#000000"
+]
+
+
+num_workers = os.cpu_count()
+
+#-----------------------------------------------------
+
 
 plt.rcParams.update({
     "font.size": 28,
@@ -26,16 +37,6 @@ plt.rcParams.update({
 })
 
 
-
-colors = [
-    "#0072B2",  # blue
-    "#E69F00",  # orange
-    "#009E73",  # green
-    "#D55E00",  # red
-    "#CC79A7",  # purple
-    "#000000"   # black for Observations
-]
-
 #--------------------------------------------------
 
 
@@ -43,7 +44,7 @@ def filewise_stats(files, varname='tas', mask=None):
     medians = []
     p99s = []
     for file in tqdm(files, desc="Stats per file"):
-        ds = xr.open_dataset(file, chunks={'time': 500})
+        ds = xr.open_dataset(file, chunks={'time': 1000})
         if varname not in ds.variables:
             if 'tas' in ds.variables:
                 varname_used = 'tas'
@@ -75,7 +76,7 @@ def filewise_stats_ddim(files, mask):
     medians = []
     p99s = []
     for file in tqdm(files, desc="Stats per file (DDIM)"):
-        ds = xr.open_dataset(file, chunks={'time': 500})
+        ds = xr.open_dataset(file, chunks={'time': 1000})
         if 'tas' in ds.variables:
             varname_used = 'tas'
         elif 'TabsD' in ds.variables:
@@ -97,12 +98,10 @@ def filewise_stats_ddim(files, mask):
 
 
 
-def pooled_samples(files, varname='tas', mask=None, sample_per_file=2000, random_seed=42):
-    rng = np.random.default_rng(random_seed)
-    samples = []
-    for file in tqdm(files, desc="Sampling per file"):
-        ds = xr.open_dataset(file, chunks={'time': 500})
-        # Try to find the correct variable
+def pooled_parallel(files, varname='tas', mask=None):
+
+    def process_file(file):
+        ds = xr.open_dataset(file, chunks={'time': 1000})
         if varname in ds.variables:
             varname_used = varname
         elif 'tas' in ds.variables:
@@ -112,66 +111,54 @@ def pooled_samples(files, varname='tas', mask=None, sample_per_file=2000, random
         elif 'temp' in ds.variables:
             varname_used = 'temp'
         else:
-            print(f"File {file} has no tas, TabsD, or temp variable. Variables: {list(ds.variables)}")
+            print(f"File {file} has no recognized temperature variable. Variables: {list(ds.variables)}")
             ds.close()
-            continue
+            return None
+
+
         temp = ds[varname_used].sel(time=slice("2011-01-01", "2020-12-30"))
+
+
+
         if mask is not None:
             mask_aligned = mask
+
+
+
             if 'time' not in mask.dims:
                 mask_aligned = mask.broadcast_like(temp.isel(time=0))
             masked = temp.where(mask_aligned).values.flatten()
         else:
             masked = temp.values.flatten()
         masked = masked[~np.isnan(masked)]
-        if masked.size > sample_per_file:
-            samples.append(rng.choice(masked, size=sample_per_file, replace=False))
-        elif masked.size > 0:
-            samples.append(masked)
+        ds.close()
+
+
+
+        if masked.size > 0:
+            return masked
         else:
             print(f"File {file} has no valid data after masking/time selection.")
-        ds.close()
-    if samples:
-        return np.concatenate(samples)
-    else:
-        return np.array([])
+            return None
 
 
-def pooled_samples_ddim(files, sample_per_file=1000, random_seed=42):
-    rng = np.random.default_rng(random_seed)
-    samples = []
-    for file in tqdm(files, desc="Sampling per file (DDIM)"):
-        ds = xr.open_dataset(file, chunks={'time': 500})
-        if 'tas' in ds.variables:
-            varname_used = 'tas'
-        elif 'TabsD' in ds.variables:
-            varname_used = 'TabsD'
-        elif 'temp' in ds.variables:
-            varname_used = 'temp'
+        pass
+
+
+
+            
+    with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
+
+        
+        results = list(executor.map(process_file, files))
+        samples = [r for r in results if r is not None and r.size > 0]
+        if samples:
+            return np.concatenate(samples)
         else:
-            print(f"File {file} has no tas, TabsD, or temp variable. Variables: {list(ds.variables)}")
-            ds.close()
-            continue
-        temp = ds[varname_used].sel(time=slice("2011-01-01", "2020-12-30"))
-        masked = temp.values.flatten()
-        masked = masked[~np.isnan(masked)]
-        if masked.size > sample_per_file:
-            samples.append(rng.choice(masked, size=sample_per_file, replace=False))
-        elif masked.size > 0:
-            samples.append(masked)
-        else:
-            print(f"File {file} has no valid data after time selection.")
-        ds.close()
-    if samples:
-        return np.concatenate(samples)
-    else:
-        return np.array([])
+            return np.array([])
     
     
 #--------------------------------------------------
-
-
-
 
 
 obs_temp = xr.open_dataset("../Processing_and_Analysis_Scripts/data_1971_2023/HR_files_full/TabsD_1971_2023.nc")["TabsD"].sel(time=slice("2011-01-01", "2020-12-30"))
@@ -188,7 +175,15 @@ bc_bicubic_unet_temp_files = [
     if any(str(year) in f for year in range(2011, 2021))
 ]
 
+
+
+
+
 bc_bicubic_ddim_temp_files = glob.glob("ALP-FINE_8.5/EQM/DDIM/DDIM_6samples_RCP85_*.nc")
+
+
+
+
 
 
 bc_bicubic_ddim_temp_files = [
@@ -205,17 +200,18 @@ bc_bicubic_ddim_temp_files = [
 obs_temp_flat = obs_temp.values.flatten()
 
 
-obs_samples = obs_temp_flat if obs_temp_flat.size < 20000 else np.random.default_rng(42).choice(obs_temp_flat, size=20000, replace=False)
+obs_samples = obs_temp_flat
+
+coarse_samples = pooled_parallel(coarse_temp_files)
+
+bc_samples = pooled_parallel(bc_temp_files)
+
+bc_bicubic_samples = pooled_parallel(bc_bicubic_temp_files)
+
+bc_bicubic_unet_samples = pooled_parallel(bc_bicubic_unet_temp_files)
 
 
-coarse_samples = pooled_samples(coarse_temp_files)
-
-bc_samples = pooled_samples(bc_temp_files)
-
-bc_bicubic_samples = pooled_samples(bc_bicubic_temp_files)
-
-bc_bicubic_unet_samples = pooled_samples(bc_bicubic_unet_temp_files)
-bc_bicubic_ddim_samples = pooled_samples_ddim(bc_bicubic_ddim_temp_files)
+bc_bicubic_ddim_samples = pooled_parallel(bc_bicubic_ddim_temp_files)
 
 
 #--------------------------------------------------
@@ -239,7 +235,7 @@ labels = [
 ]
 
 
-
+#----------------------------------
 
 
 data_nonempty = []
@@ -262,6 +258,8 @@ for d, l, c in zip(data, labels, colors):
     else:
         print(f"Warning: No valid data found for {l}, skipping.")
 
+#----------------------------------
+
 
 if not data_nonempty:
     raise RuntimeError("No data available for plotting. Please check your input files.")
@@ -272,8 +270,11 @@ p99s = [np.percentile(d, 99) for d in data_nonempty]
 
 #----------------------------------
 
-BINS = 100
-RANGE = (min([d.min() for d in data_nonempty]), max([d.max() for d in data_nonempty]))
+
+RANGE = (np.concatenate(data_nonempty).min(), np.concatenate(data_nonempty).max())
+
+#----------------------------------
+
 
 def compute_pdf(samples, bin_edges):
     hist, _ = np.histogram(samples, bins=bin_edges)
@@ -289,52 +290,58 @@ pdfs = [compute_pdf(d, bin_edges) for d in data_nonempty]
 
 
 
+
+
 plt.figure(figsize=(14, 9))
 
 x_grid = np.linspace(RANGE[0], RANGE[1], 1000)
+
+
 for samples, label, color in zip(data_nonempty, labels_nonempty, colors_nonempty):
-    kde = gaussian_kde(samples)
-    plt.plot(
-        x_grid,
-        kde(x_grid),
+    plt.hist(
+        samples,
+        bins=50,
+        density=True,
+        alpha=0.5,
         label=label,
         color=color,
-        linewidth=2.5 if color == "#000000" else 2
+        linewidth=2
     )
 
 plt.xlabel("Daily Temp (°C)")
-plt.ylabel("Probability Density")
+plt.ylabel("Density")
 plt.title("PDF of Daily Temperature (2011–2020)")
 plt.legend(fontsize=14)
-plt.tight_layout()
+
+
 plt.savefig("EUROCORDEX_11_RCP8.5_BC/outputs/pdf_temp_2011_2020_samples.png", dpi=1000)
 
 
 #----------------------------------
+""" #For violin
 
-"""
-fig, ax = plt.subplots(figsize=(14, 9))
-box = ax.boxplot(data_nonempty, labels=labels_nonempty, patch_artist=True,
-           boxprops=dict(color='black'),
-           medianprops=dict(color='black', linewidth=2),
-           whiskerprops=dict(color='black'),
-           capprops=dict(color='black'),
-           flierprops=dict(markerfacecolor='gray', marker='o', markersize=4, alpha=0.3))
+all_samples = []
+all_labels = []
+for samples, label in zip(data_nonempty, labels_nonempty):
+    all_samples.extend(samples)
+    all_labels.extend([label] * len(samples))
 
+df = pd.DataFrame({'Temperature': all_samples, 'Dataset': all_labels})
 
-
-for patch, color in zip(box['boxes'], colors_nonempty):
-    patch.set_facecolor(color)
-
-
-
-ax.set_xticklabels(labels_nonempty, rotation=20, ha="right")
-ax.set_ylabel("Daily Temp (°C)")
-#ax.set_title("Pooled daily temperature from EUR-12 RCP 8.5 MME (random subsample from 2011–2020)")
-ax.grid(axis='y', linestyle='--', alpha=0.7)
-
-
+plt.figure(figsize=(14, 9))
+sns.violinplot(
+    x='Dataset',
+    y='Temperature',
+    data=df,
+    palette=colors_nonempty,
+    cut=0,
+    linewidth=1.5
+)
+plt.xticks(rotation=20, ha="right")
+plt.ylabel("Daily Temp (°C)")
+plt.xlabel("")
+plt.grid(axis='y', linestyle='--', alpha=0.7)
 plt.tight_layout()
+plt.savefig("EUROCORDEX_11_RCP8.5_BC/outputs/rcp85_EQM_pooled_temp_violinplot_2011_2020_all.png", dpi=1000)
 
-plt.savefig("EUROCORDEX_11_RCP8.5_BC/outputs/rcp85_EQM_pooled_temp_boxplot_2011_2020_samples.png", dpi=1000)
 """

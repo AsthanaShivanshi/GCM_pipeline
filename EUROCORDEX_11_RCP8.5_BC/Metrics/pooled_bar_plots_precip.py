@@ -2,16 +2,26 @@ import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
 import xarray as xr
-
+import pandas as pd
 sns.set_style("whitegrid")
 
 import glob
 from tqdm import tqdm
 
 import matplotlib.pyplot as plt
-from scipy.stats import gaussian_kde
+
+import concurrent.futures
 
 np.Inf = np.inf
+import os
+num_workers = os.cpu_count() 
+
+
+
+
+BINS = 100
+RANGE = (0.01, 300)
+EPS = 1e-10 #for non zero log error 
 
 #--------------------------------------------------
 plt.rcParams.update({
@@ -95,70 +105,55 @@ def filewise_stats_ddim(files, mask):
 
 
 
-def pooled_all_samples(files, varname='pr', mask=None, min_clip=0.01):
-    samples = []
-    for file in tqdm(files, desc="Pooling all samples"):
+def pooled_parallel(files, varname='pr', mask=None):
+    def process_file(file):
         ds = xr.open_dataset(file, chunks={'time': 1000})
-        # Robust variable selection
         if varname in ds.variables:
             varname_used = varname
         elif 'pr' in ds.variables:
             varname_used = 'pr'
+        elif 'RhiresD' in ds.variables:
+            varname_used = 'RhiresD'
         elif 'precip' in ds.variables:
             varname_used = 'precip'
         else:
-            print(f"File {file} has no pr/precip variable. Variables: {list(ds.variables)}")
+            print(f"File {file} has no recognized precip variable. Variables: {list(ds.variables)}")
             ds.close()
-            continue
-        pr = ds[varname_used].sel(time=slice("2011-01-01", "2020-12-30"))
+            return None
+        temp = ds[varname_used].sel(time=slice("2011-01-01", "2020-12-30"))
         if mask is not None:
             mask_aligned = mask
             if 'time' not in mask.dims:
-                mask_aligned = mask.broadcast_like(pr.isel(time=0))
-            masked = pr.where(mask_aligned).values.flatten()
+                mask_aligned = mask.broadcast_like(temp.isel(time=0))
+            masked = temp.where(mask_aligned).values.flatten()
         else:
-            masked = pr.values.flatten()
+            masked = temp.values.flatten()
         masked = masked[~np.isnan(masked)]
-        masked = np.clip(masked, min_clip, None)  # Clip to min_clip for log
-        if masked.size > 0:
-            samples.append(masked)
+        masked = np.clip(masked, EPS, None)
         ds.close()
-    if samples:
-        return np.concatenate(samples)
-    else:
-        return np.array([])
+
+
+
+        if masked.size > 0:
+            return masked
+        else:
+            print(f"File {file} has no valid data after masking/time selection.")
+            return None
+
+
+        pass
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
+
+        
+        results = list(executor.map(process_file, files))
+        samples = [r for r in results if r is not None and r.size > 0]
+        if samples:
+            return np.concatenate(samples)
+        else:
+            return np.array([])
     
 
-
-
-def pooled_samples_ddim(files, mask, sample_per_file=3000, random_seed=42):
-    rng = np.random.default_rng(random_seed)
-    samples = []
-    for file in tqdm(files, desc="Sampling per file (DDIM)"):
-        ds = xr.open_dataset(file, chunks={'time': 1000})
-        if 'pr' in ds.variables:
-            varname_used = 'pr'
-        elif 'precip' in ds.variables:
-            varname_used = 'precip'
-        else:
-            ds.close()
-            continue
-        pr = ds[varname_used].sel(time=slice("2011-01-01", "2020-12-30"))
-        mask_aligned = mask
-        if 'time' not in mask.dims:
-            mask_aligned = mask.broadcast_like(pr.isel(time=0))
-        masked = pr.where(mask_aligned).values.flatten()
-        masked = masked[~np.isnan(masked)]
-        masked = np.clip(masked, 0, None)
-        if masked.size > sample_per_file:
-            samples.append(rng.choice(masked, size=sample_per_file, replace=False))
-        elif masked.size > 0:
-            samples.append(masked)
-        ds.close()
-    if samples:
-        return np.concatenate(samples)
-    else:
-        return np.array([])
 
 #--------------------------------------------------
 
@@ -178,6 +173,8 @@ bc_bicubic_precip_files = glob.glob("EUROCORDEX_11_RCP8.5_BC/EQM/pr_bicubic_EUR-
 bc_bicubic_unet_precip_files = glob.glob("ALP-FINE_8.5/EQM/UNet/UNet_RCP85_2011-2020_tas_*_rcp85_1971-2099.nc")
 
 
+
+
 bc_bicubic_unet_precip_files = [
     f for f in bc_bicubic_unet_precip_files
     if any(str(year) in f for year in range(2011, 2021))
@@ -195,15 +192,11 @@ bc_bicubic_ddim_precip_files = [
 #--------------------------------------------------
 
 
-
-obs_precip_clipped = np.clip(obs_precip.values[~np.isnan(obs_precip.values)], 0, None)
-obs_samples = obs_precip_clipped if obs_precip_clipped.size < 10000 else np.random.default_rng(42).choice(obs_precip_clipped, size=10000, replace=False)
-
-coarse_samples = pooled_all_samples(coarse_precip_files, mask=obs_mask_precip)
-bc_samples = pooled_all_samples(bc_precip_files, mask=obs_mask_precip)
-bc_bicubic_samples = pooled_all_samples(bc_bicubic_precip_files, mask=obs_mask_precip)
-bc_bicubic_unet_samples = pooled_all_samples(bc_bicubic_unet_precip_files, mask=obs_mask_precip)
-bc_bicubic_ddim_samples = pooled_all_samples(bc_bicubic_ddim_precip_files, mask=obs_mask_precip)
+coarse_samples = pooled_parallel(coarse_precip_files, mask=obs_mask_precip)
+bc_samples = pooled_parallel(bc_precip_files, mask=obs_mask_precip)
+bc_bicubic_samples = pooled_parallel(bc_bicubic_precip_files, mask=obs_mask_precip)
+bc_bicubic_unet_samples = pooled_parallel(bc_bicubic_unet_precip_files, mask=obs_mask_precip)
+bc_bicubic_ddim_samples = pooled_parallel(bc_bicubic_ddim_precip_files, mask=obs_mask_precip)
 
 obs_precip_clipped = np.clip(obs_precip.values[~np.isnan(obs_precip.values)], 0.01, None)
 obs_samples = obs_precip_clipped
@@ -250,6 +243,9 @@ p99s = [
     np.percentile(obs_samples, 99)
 ]
 
+#----------------------------------
+
+
 
 data_nonempty = []
 labels_nonempty = []
@@ -278,12 +274,10 @@ p99s = [np.percentile(d, 99) for d in data_nonempty]
 
 #plot
 #----------------------------------
-# Log-transform for histogram/KDE
+# Log-transform for histogram
 log_data_nonempty = [np.log10(d) for d in data_nonempty]
 
-BINS = 100
-RANGE = (0.01, 300)
-EPS = 1e-10
+
 
 
 plt.figure(figsize=(14, 9))
@@ -291,49 +285,53 @@ log_range = (np.log10(0.01), np.log10(300))
 x_grid = np.linspace(log_range[0], log_range[1], 1000)
 
 for log_samples, label, color in zip(log_data_nonempty, labels_nonempty, colors_nonempty):
-    kde = gaussian_kde(log_samples)
-    plt.plot(
-        x_grid,
-        kde(x_grid),
+    plt.hist(
+        log_samples,
+        bins=BINS,
+        density=True,
+        alpha=0.5,
         label=label,
         color=color,
-        linewidth=2.5 if color == "#000000" else 2
+        linewidth=2
     )
 
 plt.xlabel("log10(Daily Precip [mm/day])")
 plt.ylabel("Probability Density")
 plt.title("PDF of log10 (Precip) (2011–2020)")
-plt.legend(fontsize=14)
+plt.legend() 
 plt.tight_layout()
 plt.savefig("EUROCORDEX_11_RCP8.5_BC/outputs/pdf_log_precip_2011_2020_samples.png", dpi=1000)
 
 
-#----------------------------------
-
 #--------------------------------------------------
 
+""" #For violin
 
-#For boxplots 
-"""fig, ax = plt.subplots(figsize=(14, 9))
+# Prepare data for violin plot (all points, not subsampled)
+all_samples = []
+all_labels = []
+for samples, label in zip(data_nonempty, labels_nonempty):
+    all_samples.extend(samples)
+    all_labels.extend([label] * len(samples))
 
-box = ax.boxplot(data, labels=labels, patch_artist=True,
-           boxprops=dict(color='black'),
-           medianprops=dict(color='black', linewidth=2),
-           whiskerprops=dict(color='black'),
-           capprops=dict(color='black'),
-           flierprops=dict(markerfacecolor='gray', marker='o', markersize=4, alpha=0.3))
+df = pd.DataFrame({'Precipitation': all_samples, 'Dataset': all_labels})
 
-for patch, color in zip(box['boxes'], colors):
-    patch.set_facecolor(color)
-
-
-    
-ax.set_xticklabels(labels, rotation=20, ha="right")
-ax.set_ylabel("Daily Precip (mm/day)")
-#ax.set_title("Pooled precipitation from EUR-12 RCP 8.5 MME (random subsample from 2011–2020)")
-ax.grid(axis='y', linestyle='--', alpha=0.7)
+plt.figure(figsize=(14, 9))
+sns.violinplot(
+    x='Dataset',
+    y='Precipitation',
+    data=df,
+    palette=colors_nonempty,
+    cut=0,
+    linewidth=1.5
+)
+plt.xticks(rotation=20, ha="right")
+plt.ylabel("Daily Precip (mm/day)")
+plt.xlabel("")
+plt.grid(axis='y', linestyle='--', alpha=0.7)
 plt.ylim(0, 250)
 plt.tight_layout()
+plt.savefig("EUROCORDEX_11_RCP8.5_BC/outputs/rcp85_EQM_pooled_precip_violinplot_2011_2020_all.png", dpi=1000)
 
 
-plt.savefig("EUROCORDEX_11_RCP8.5_BC/outputs/rcp85_EQM_pooled_precip_boxplot_2011_2020_samples.png", dpi=1000)"""
+"""
