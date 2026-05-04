@@ -302,7 +302,7 @@ for samples, label, color in zip(data_nonempty, labels_nonempty, colors_nonempty
         samples,
         bins=50,
         density=True,
-        alpha=0.5,
+        alpha=0.8,
         label=label,
         color=color,
         linewidth=2
@@ -311,7 +311,7 @@ for samples, label, color in zip(data_nonempty, labels_nonempty, colors_nonempty
 plt.xlabel("Daily Temp (°C)")
 plt.ylabel("Density")
 plt.title("PDF of Daily Temperature (2011–2020)")
-plt.legend(fontsize=14)
+plt.legend(fontsize=13)
 
 
 plt.savefig("EUROCORDEX_11_RCP8.5_BC/outputs/pdf_temp_2011_2020_samples.png", dpi=1000)

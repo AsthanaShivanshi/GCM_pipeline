@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --job-name=pdf_log_precip_temp_job
-#SBATCH --output=logs/logpdf_log_precip_temp_job-%j.log
-#SBATCH --error=logs/logpdf_log_precip_temp_job-%j.log
+#SBATCH --job-name=pdf_log_precip_job
+#SBATCH --output=logs/logpdf_log_precip_job-%j.log
+#SBATCH --error=logs/logpdf_log_precip_job-%j.log
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
 #SBATCH --time=03-00:00:00
@@ -15,6 +15,6 @@ source environment.sh
 
 cd /work/FAC/FGSE/IDYST/tbeucler/downscaling/sasthana/Downscaling/GCM_pipeline
 
-python EUROCORDEX_11_RCP8.5_BC/Metrics/pooled_bar_plots_temp.py
+#python EUROCORDEX_11_RCP8.5_BC/Metrics/pooled_bar_plots_temp.py
 
 python EUROCORDEX_11_RCP8.5_BC/Metrics/pooled_bar_plots_precip.py
