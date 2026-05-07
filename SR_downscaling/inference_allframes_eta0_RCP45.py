@@ -422,7 +422,10 @@ if __name__ == "__main__":
                 }
             )
 
-            out_path_unet = f"ALP-FINE_4.5/{args.ensemble}/UNet/UNet_RCP45_{args.start_year}-{args.end_year}_tas_{model_id}.nc"
+            rcp_match = re.search(r'(rcp\d+)', model_id)
+            rcp_str = rcp_match.group(1).upper() if rcp_match else "RCPXX"
+            out_path_unet = f"ALP-FINE_4.5/{args.ensemble}/UNet/UNet_{rcp_str}_{args.start_year}-{args.end_year}_tas_{model_id}.nc"
+
             ds_unet.to_netcdf(out_path_unet, encoding=encoding)
             print(f"UNet O/P saved as {out_path_unet}")
 
@@ -443,9 +446,6 @@ if __name__ == "__main__":
 
 
     
-
-    
-
 
     elif args.mode == "ddim":
 

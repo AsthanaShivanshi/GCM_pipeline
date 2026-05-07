@@ -422,7 +422,10 @@ if __name__ == "__main__":
                 }
             )
 
-            out_path_unet = f"ALP-FINE_8.5/{args.ensemble}/UNet/UNet_RCP85_{args.start_year}-{args.end_year}_tas_{model_id}.nc"
+
+            rcp_match = re.search(r'(rcp\d+)', model_id)
+            rcp_str = rcp_match.group(1).upper() if rcp_match else "RCPXX"
+            out_path_unet = f"ALP-FINE_8.5/{args.ensemble}/UNet/UNet_{rcp_str}_{args.start_year}-{args.end_year}_tas_{model_id}.nc"
             ds_unet.to_netcdf(out_path_unet, encoding=encoding)
             print(f"UNet O/P saved as {out_path_unet}")
 
@@ -475,7 +478,9 @@ if __name__ == "__main__":
                 print(f"UNet file for year {args.start_year} and {pr_path} does not exist, skipping.")
                 continue
 
-            out_path_ddim = f"ALP-FINE_8.5/{args.ensemble}/DDIM/DDIM_{num_samples}samples_RCP85_{args.start_year}-{args.end_year}_tas_{get_id(pr_path, 'pr')}"
+            rcp_match = re.search(r'(rcp\d+)', model_id)
+            rcp_str = rcp_match.group(1).upper() if rcp_match else "RCPXX"
+            out_path_ddim = f"ALP-FINE_8.5/{args.ensemble}/DDIM/DDIM_{num_samples}samples_{rcp_str}_{args.start_year}-{args.end_year}_tas_{get_id(pr_path, 'pr')}"
             if os.path.exists(out_path_ddim):
                 print(f"DDIM file already exists for {pr_path}, skipping sampling.")
                 continue

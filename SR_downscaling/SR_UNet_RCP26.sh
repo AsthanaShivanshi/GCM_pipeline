@@ -4,7 +4,7 @@
 #SBATCH --error=logs/SR/UNet_SR_RCP26_BC_AllCells_job_error-%A_%a.log
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
-#SBATCH --time=08:00:00
+#SBATCH --time=03:00:00
 #SBATCH --mem=128G
 #SBATCH --partition=gpu   ##OR gpu-h100
 #SBATCH --array=0-12 ##13blocks for 10 years each 

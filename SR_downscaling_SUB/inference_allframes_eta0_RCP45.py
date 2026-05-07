@@ -29,7 +29,7 @@ from models.components.diff.denoiser.ddim import DDIMSampler
 from models.components.diff.conditioner import AFNOConditionerNetCascade
 from models.diff_module import DDIMResidualContextual
 
-#Purpose : Bicubically interpolating and then SR  GCM_pipeline/EUROCORDEX_11_RCP2.6_BC
+#Purpose : Bicubically interpolating and then SR  GCM_pipeline/EUROCORDEX_11_RCP4.5_BC
 #----------------------------------------------------------------------#
 
 def run_cdo(cmd):
@@ -113,9 +113,12 @@ config_dict = {
 
 
 def find_unet_file(unet_dir, pr_path, target_year):
-    # Pattern: UNet_RCP26_YYYY-YYYY_tas_{model_id}.nc
+    # Pattern: UNet_RCP45_YYYY-YYYY_tas_{model_id}.nc
+
+
+
     model_id = get_id(pr_path, 'pr')
-    pattern = re.compile(r"UNet_RCP26_(\d{4})-(\d{4})_tas_" + re.escape(model_id))
+    pattern = re.compile(r"UNet_RCP45_(\d{4})-(\d{4})_tas_" + re.escape(model_id))
     for fname in os.listdir(unet_dir):
         m = pattern.match(fname)
         if m:
@@ -484,7 +487,11 @@ if __name__ == "__main__":
                 print(f"UNet file for year {args.start_year} and {pr_path} does not exist, skipping.")
                 continue
 
-            out_path_ddim = f"ALP-FINE_4.5/{args.ensemble}/DDIM/DDIM_{num_samples}samples_RCP45_{args.start_year}-{args.end_year}_tas_{get_id(pr_path, 'pr')}"
+
+            rcp_match = re.search(r'(rcp\d+)', get_id(pr_path, 'pr'))
+            rcp_str = rcp_match.group(1).upper() if rcp_match else "RCPXX"
+
+            out_path_ddim = f"ALP-FINE_4.5/{args.ensemble}/DDIM/DDIM_{num_samples}samples_{rcp_str}_{args.start_year}-{args.end_year}_tas_{get_id(pr_path, 'pr')}"
             if os.path.exists(out_path_ddim):
                 print(f"DDIM file already exists for {pr_path}, skipping sampling.")
                 continue
@@ -518,7 +525,9 @@ if __name__ == "__main__":
                 lat2d, lon2d = np.meshgrid(ref_lat, ref_lon, indexing="ij")
             encoding = {}
 
-            # --- Collect all batches in memory ---
+
+
+
             all_ds_ddim = []
 
             for batch_start in tqdm(range(0, N, batch_size), desc="DDIM Sampling"):

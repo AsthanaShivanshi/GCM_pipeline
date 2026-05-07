@@ -29,7 +29,7 @@ from models.components.diff.denoiser.ddim import DDIMSampler
 from models.components.diff.conditioner import AFNOConditionerNetCascade
 from models.diff_module import DDIMResidualContextual
 
-#Purpose : Bicubically interpolating and then SR  GCM_pipeline/EUROCORDEX_11_RCP2.6_BC
+#Purpose : Bicubically interpolating and then SR  GCM_pipeline/EUROCORDEX_11_RCP8.5_BC
 #----------------------------------------------------------------------#
 
 def run_cdo(cmd):
@@ -48,6 +48,10 @@ def cat_file(pattern, out_path, dim="time"):
         os.remove(f)
     print(f"Saved {out_path} and deleted intermediates.")
 
+
+
+
+
 #----------------------------------------------------------------------#
 
 num_samples = 6 # Deterministic for fixed random seed
@@ -56,11 +60,15 @@ S = 30         # Number of DDIM steps
 manual_seed=124
 
 
+
+
+
 #----------------------------------------------------------------------#
 
 
 
-#Only downscaling three runs overlapping and available across RCPs
+
+#Only downscaling three runs overlapping and available across RCPs... using those. 
 
 #----------------------------------------------------------------------#
 
@@ -113,9 +121,13 @@ config_dict = {
 
 
 def find_unet_file(unet_dir, pr_path, target_year):
-    # Pattern: UNet_RCP26_YYYY-YYYY_tas_{model_id}.nc
+
+
+    # Pattern: UNet_RCP85_YYYY-YYYY_tas_{model_id}.nc
+
+    
     model_id = get_id(pr_path, 'pr')
-    pattern = re.compile(r"UNet_RCP26_(\d{4})-(\d{4})_tas_" + re.escape(model_id))
+    pattern = re.compile(r"UNet_RCP85_(\d{4})-(\d{4})_tas_" + re.escape(model_id))
     for fname in os.listdir(unet_dir):
         m = pattern.match(fname)
         if m:
@@ -242,10 +254,13 @@ sampler = DDIMSampler(ddim, device=device)
 #----------------------------------------------------------------------#
 
 
+#Three runs across the three scenarios.. for overlapping scenarios. 
+
+
 ALLOWED_IDS = {
-    "EUR-11_DMI-HIRHAM5_ICHEC-EC-EARTH_r3i1p1_rcp45_1971-2099.nc",
-    "EUR-11_MPI-CSC-REMO2009_MPI-M-MPI-ESM-LR_r1i1p1_rcp45_1971-2099.nc",
-    "EUR-11_SMHI-RCA4_ICHEC-EC-EARTH_r12i1p1_rcp45_1971-2099.nc"
+    "EUR-11_DMI-HIRHAM5_ICHEC-EC-EARTH_r3i1p1_rcp85_1971-2099.nc",
+    "EUR-11_MPI-CSC-REMO2009_MPI-M-MPI-ESM-LR_r1i1p1_rcp85_1971-2099.nc",
+    "EUR-11_SMHI-RCA4_ICHEC-EC-EARTH_r12i1p1_rcp85_1971-2099.nc"
 }
 
 
@@ -448,7 +463,7 @@ if __name__ == "__main__":
 
     
 
-    
+
 
 
     elif args.mode == "ddim":
@@ -484,7 +499,11 @@ if __name__ == "__main__":
                 print(f"UNet file for year {args.start_year} and {pr_path} does not exist, skipping.")
                 continue
 
-            out_path_ddim = f"ALP-FINE_8.5/{args.ensemble}/DDIM/DDIM_{num_samples}samples_RCP85_{args.start_year}-{args.end_year}_tas_{get_id(pr_path, 'pr')}"
+
+        rcp_match = re.search(r'(rcp\d+)', get_id(pr_path, 'pr'))
+            rcp_str = rcp_match.group(1).upper() if rcp_match else "RCPXX"
+
+            out_path_ddim = f"ALP-FINE_8.5/{args.ensemble}/DDIM/DDIM_{num_samples}samples_{rcp_str}_{args.start_year}-{args.end_year}_tas_{get_id(pr_path, 'pr')}"
             
             
             if os.path.exists(out_path_ddim):
