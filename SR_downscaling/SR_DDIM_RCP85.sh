@@ -4,11 +4,11 @@
 #SBATCH --error=logs/SR/EQM_DDIM_SR_RCP85_BC_AllCells_job_error-%A_%a.txt
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
-#SBATCH --time=17:00:00
-#SBATCH --mem=128G
+#SBATCH --time=10:00:00
+#SBATCH --mem=64G
 #SBATCH --partition=gpu
 #SBATCH --gres=gpu:1
-#SBATCH --array=16-118 ##yearly till 2099, 119 years in total.
+#SBATCH --array=32-118 ##yearly till 2099, 119 years in total.
 
 
 #¨¨¨¨¨¨!!!!!!!!This script to be executed only after SR_UNet_xx.sh is complete for both bicubic and unet modes. 
@@ -36,6 +36,8 @@ END_YEAR=${END_YEARS[$SLURM_ARRAY_TASK_ID]}
 MODE=${MODE:-ddim}
 
 # sequential for each ensemble. 
+
+#for ENSEMBLE in EQM dOTC CDFT; do
 
 for ENSEMBLE in EQM; do
     echo "($START_YEAR-$END_YEAR) started in mode $MODE for ensemble $ENSEMBLE"

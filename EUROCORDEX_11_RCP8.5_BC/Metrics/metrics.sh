@@ -15,6 +15,6 @@ source environment.sh
 
 cd /work/FAC/FGSE/IDYST/tbeucler/downscaling/sasthana/Downscaling/GCM_pipeline
 
-#python EUROCORDEX_11_RCP8.5_BC/Metrics/pooled_bar_plots_temp.py
+python EUROCORDEX_11_RCP8.5_BC/Metrics/pooled_bar_plots_temp.py
 
 python EUROCORDEX_11_RCP8.5_BC/Metrics/pooled_bar_plots_precip.py

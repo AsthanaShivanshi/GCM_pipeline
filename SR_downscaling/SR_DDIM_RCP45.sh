@@ -4,8 +4,8 @@
 #SBATCH --error=logs/SR/DDIM_SR_SR_pr_tas_RCP45_BC_AllCells_job_error-%A_%a.txt
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
-#SBATCH --time=01-05:00:00
-#SBATCH --mem=128G
+#SBATCH --time=10:00:00
+#SBATCH --mem=64G
 #SBATCH --partition=gpu
 #SBATCH --gres=gpu:1
 #SBATCH --array=0-118 ##yearly till 2099, 119 years in total.

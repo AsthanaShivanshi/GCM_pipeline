@@ -1,10 +1,10 @@
 #!/bin/bash
-#SBATCH --job-name=EQM_DDIM_SR_RCP26_BC_allcells
-#SBATCH --output=logs/SR/EQM_DDIM_SR_SR_pr_tas_RCP26_BC_AllCells_output-%A_%a.txt
-#SBATCH --error=logs/SR/EQM_DDIM_SR_SR_pr_tas_RCP26_BC_AllCells_job_error-%A_%a.txt
+#SBATCH --job-name=RCP45_DDIM_SR_BC_allcells
+#SBATCH --output=logs/SR_SUB/DDIM_SR_SR_pr_tas_RCP45_BC_AllCells_output-%A_%a.txt
+#SBATCH --error=logs/SR_SUB/DDIM_SR_SR_pr_tas_RCP45_BC_AllCells_job_error-%A_%a.txt
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
-#SBATCH --time=05:00:00
+#SBATCH --time=09:00:00
 #SBATCH --mem=64G
 #SBATCH --partition=gpu
 #SBATCH --gres=gpu:1
@@ -37,10 +37,10 @@ MODE=${MODE:-ddim}
 
 # sequential for each ensemble. 
 
-for ENSEMBLE in EQM; do
+for ENSEMBLE in EQM dOTC CDFT; do
     echo "($START_YEAR-$END_YEAR) started in mode $MODE for ensemble $ENSEMBLE"
-    python SR_downscaling/inference_allframes_eta0_RCP26.py --start_year $START_YEAR --end_year $END_YEAR --mode $MODE --ensemble $ENSEMBLE
-    echo "$MODE for RCP26 ($START_YEAR-$END_YEAR) finished for $ENSEMBLE"
+    python SR_downscaling_SUB/inference_allframes_eta0_RCP45.py --start_year $START_YEAR --end_year $END_YEAR --mode $MODE --ensemble $ENSEMBLE
+    echo "$MODE for RCP45 ($START_YEAR-$END_YEAR) finished for $ENSEMBLE"
 done
 
 
