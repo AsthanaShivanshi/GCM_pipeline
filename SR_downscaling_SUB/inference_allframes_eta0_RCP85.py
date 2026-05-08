@@ -500,7 +500,7 @@ if __name__ == "__main__":
                 continue
 
 
-        rcp_match = re.search(r'(rcp\d+)', get_id(pr_path, 'pr'))
+            rcp_match = re.search(r'(rcp\d+)', get_id(pr_path, 'pr'))
             rcp_str = rcp_match.group(1).upper() if rcp_match else "RCPXX"
 
             out_path_ddim = f"ALP-FINE_8.5/{args.ensemble}/DDIM/DDIM_{num_samples}samples_{rcp_str}_{args.start_year}-{args.end_year}_tas_{get_id(pr_path, 'pr')}"
