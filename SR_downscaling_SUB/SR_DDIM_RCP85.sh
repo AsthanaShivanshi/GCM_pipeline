@@ -1,14 +1,14 @@
 #!/bin/bash
-#SBATCH --job-name=dOTC_RCP85_DDIM_SR_BC_allcells
-#SBATCH --output=logs/SR_SUB/dOTC_RCP85_DDIM_SR_BC_AllCells_output-%A_%a.txt
-#SBATCH --error=logs/SR_SUB/dOTC_RCP85_DDIM_SR_BC_AllCells_job_error-%A_%a.txt
+#SBATCH --job-name=EQM_RCP85_DDIM_SR_BC_allcells
+#SBATCH --output=logs/SR_SUB/EQM_RCP85_DDIM_SR_BC_AllCells_output-%A_%a.txt
+#SBATCH --error=logs/SR_SUB/EQM_RCP85_DDIM_SR_BC_AllCells_job_error-%A_%a.txt
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --time=03:30:00
 #SBATCH --mem=64G
-#SBATCH --partition=gpu-l40
+#SBATCH --partition=gpu
 #SBATCH --gres=gpu:1
-#SBATCH --array=0-118%5 ##yearly till 2099, 119 years in total.
+#SBATCH --array=5-118%5 ##yearly till 2099, 119 years in total.
 
 
 #¨¨¨¨¨¨!!!!!!!!This script to be executed only after SR_UNet_xx.sh is complete for both bicubic and unet modes. 
@@ -39,7 +39,7 @@ MODE=${MODE:-ddim}
 
 #for ENSEMBLE in EQM dOTC CDFT; do
 
-for ENSEMBLE in dOTC ; do
+for ENSEMBLE in EQM ; do
     echo "($START_YEAR-$END_YEAR) started in mode $MODE for ensemble $ENSEMBLE"
     python SR_downscaling_SUB/inference_allframes_eta0_RCP85.py --start_year $START_YEAR --end_year $END_YEAR --mode $MODE --ensemble $ENSEMBLE
     echo "$MODE for RCP85 ($START_YEAR-$END_YEAR) finished for $ENSEMBLE"
