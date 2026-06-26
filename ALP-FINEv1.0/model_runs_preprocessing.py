@@ -4,7 +4,7 @@ import subprocess
 import config
 
 
-CH_BOX = [5, 11, 45, 48]  # rough coords
+CH_BOX = [5, 12, 45, 48]  # rough coords
 
 PR_TARGET = f"{config.DATASETS_TRAINING_DIR}/RhiresD_step2_coarse.nc"
 TAS_TARGET = f"{config.DATASETS_TRAINING_DIR}/TabsD_step2_coarse.nc"

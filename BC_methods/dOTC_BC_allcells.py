@@ -1,254 +1,415 @@
+import argparse
 import importlib.util
-
-spec = importlib.util.spec_from_file_location("config", "/work/FAC/FGSE/IDYST/tbeucler/downscaling/sasthana/Downscaling/GCM_pipeline/EUROCORDEX_11_RCP4.5/config.py")
-config = importlib.util.module_from_spec(spec)
-
-spec.loader.exec_module(config)
-
-import glob
 import os
-from tqdm import tqdm
-import xarray as xr
+import warnings
+
 import numpy as np
+import xarray as xr
 from joblib import Parallel, delayed
 from SBCK import dOTC
-import warnings  
-warnings.filterwarnings("ignore", category=DeprecationWarning) 
+from tqdm import tqdm
+
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+
+spec = importlib.util.spec_from_file_location(
+    "config",
+    "/work/FAC/FGSE/IDYST/tbeucler/downscaling/sasthana/Downscaling/GCM_pipeline/ALP-FINEv1.0/config.py",
+)
+config = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(config)
 
 
+def get_doy(d):
+    return (
+        np.datetime64(d, "D")
+        - np.datetime64(str(d)[:4] + "-01-01", "D")
+    ).astype(int) + 1
 
-def get_doy(d): 
-    return (np.datetime64(d, 'D') - np.datetime64(str(d)[:4] + '-01-01', 'D')).astype(int) + 1
+
+def open_ds(path):
 
 
+    ds = xr.open_dataset(path, decode_times=True, use_cftime=True)
 
-def filter_valid_dates(ds):
     time_values = []
     valid_indices = []
-    for idx, t in enumerate(ds['time'].values):
+
+    for idx, t in enumerate(ds["time"].values):
         try:
-            time_values.append(np.datetime64(f"{t.year:04d}-{t.month:02d}-{t.day:02d}"))
+            dt = np.datetime64(f"{t.year:04d}-{t.month:02d}-{t.day:02d}")
+            time_values.append(dt)
             valid_indices.append(idx)
         except ValueError:
             continue
-    ds_filtered = ds.isel(time=valid_indices)
-    ds_filtered['time'] = time_values
+
+
+
+    ds_filtered = ds.isel(time=valid_indices).copy()
+    ds_filtered["time"] = np.array(time_values, dtype="datetime64[D]")
+    ds.close()
     return ds_filtered
 
 
+def metadata(hist_times, target_times, obs_times):
+    calib_start = np.datetime64("1981-01-01")
+    calib_end = np.datetime64("2010-12-31")
 
+    hist_times_np = np.asarray(hist_times, dtype="datetime64[D]")
+    target_times_np = np.asarray(target_times, dtype="datetime64[D]")
+    obs_times_np = np.asarray(obs_times, dtype="datetime64[D]")
 
-def bivariate_dotc(tas_path, precip_path, obs_tas_path, obs_precip_path, out_tas_path, out_precip_path):
-    var_names = ["tas", "pr"]
-    obs_var_names = ["TabsD", "RhiresD"]
-    model_paths = [tas_path, precip_path]
-    obs_paths = [obs_tas_path, obs_precip_path]
+    hist_times_calib = hist_times_np[
+        (hist_times_np >= calib_start) & (hist_times_np <= calib_end)
+    ]
+    obs_times_calib = obs_times_np[
+        (obs_times_np >= calib_start) & (obs_times_np <= calib_end)
+    ]
+    calib_dates = np.intersect1d(hist_times_calib, obs_times_calib)
 
-    model_datasets = []
-    for p in model_paths:
-        ds = xr.open_dataset(p, decode_times=True, use_cftime=True)
-        ds = filter_valid_dates(ds)
-        model_datasets.append(ds[var_names[model_paths.index(p)]])
-
-    obs_datasets = []
-    for p, ovn in zip(obs_paths, obs_var_names):
-        ds = xr.open_dataset(p, decode_times=True, use_cftime=True)
-        obs_datasets.append(ds[ovn])
-
-
-
-
-    ntime, nN, nE = model_datasets[0].shape
-    model_times = model_datasets[0]['time'].values
-    obs_times = obs_datasets[0]['time'].values
-
-
-
-    def process_cell(i, j):
-        full_mod_cells = [ds[:, i, j].values for ds in model_datasets]
-        full_mod_stack = np.stack(full_mod_cells, axis=1)
-        full_times = model_times
-        full_doys = np.array([get_doy(d) for d in full_times])
-        nan_fraction = np.isnan(full_mod_stack).sum() / full_mod_stack.size
-
-
-
-        if nan_fraction > 0.7:
-            return np.full_like(full_mod_stack, np.nan)
-
-        calib_start = np.datetime64("1981-01-01")
-        calib_end = np.datetime64("2010-12-31")
-
-        # All times to datetime64 
-        model_times_np = np.array([np.datetime64(str(t)[:10]) for t in model_times])
-        obs_times_np = np.array([np.datetime64(str(t)[:10]) for t in obs_times])
-
-        calib_start = np.datetime64("1981-01-01")
-        calib_end = np.datetime64("2010-12-31")
-
-        model_times_calib = model_times_np[(model_times_np >= calib_start) & (model_times_np <= calib_end)]
-        obs_times_calib = obs_times_np[(obs_times_np >= calib_start) & (obs_times_np <= calib_end)]
-        calib_dates = np.intersect1d(model_times_calib, obs_times_calib)
-
-        calib_model_mask = np.isin(model_times_np, calib_dates)
-        calib_obs_mask = np.isin(obs_times_np, calib_dates)
-
-
-        calib_doys = np.array([get_doy(d) for d in calib_dates])  # calib_dates: intersection of model/obs dates in calibration period
-        full_doys = np.array([get_doy(d) for d in model_times_np])  # model_times_np: all model times
-
-        calib_mod_cells = [ds[:, i, j].values[calib_model_mask] for ds in model_datasets]
-        calib_obs_cells = [ds[:, i, j].values[calib_obs_mask] for ds in obs_datasets]
-        calib_mod_stack = np.stack(calib_mod_cells, axis=1)
-        calib_obs_stack = np.stack(calib_obs_cells, axis=1)
-        full_corrected_stack = np.full_like(full_mod_stack, np.nan)
-
-
-
-
-        for doy in range(1, 367):
-            window_diffs = (calib_doys - doy + 366) % 366
-            window_mask = (window_diffs <= 45) | (window_diffs >= (366 - 45))
-            calib_mod_win = calib_mod_stack[window_mask]
-            calib_obs_win = calib_obs_stack[window_mask]
-            full_mask = (full_doys == doy)
-            full_mod_win_for_pred = full_mod_stack[full_mask]
-            if (calib_mod_win.shape[0] == 0 or calib_obs_win.shape[0] == 0 or 
-                full_mod_win_for_pred.shape[0] == 0):
-                continue
-
-
-
-            valid_calib_mask = ~(np.isnan(calib_mod_win).any(axis=1) | np.isnan(calib_obs_win).any(axis=1))
-            valid_pred_mask = ~np.isnan(full_mod_win_for_pred).any(axis=1)
-            calib_mod_win_clean = calib_mod_win[valid_calib_mask]
-            calib_obs_win_clean = calib_obs_win[valid_calib_mask]
-            full_mod_win_clean = full_mod_win_for_pred[valid_pred_mask]
-
-            if (calib_mod_win_clean.shape[0] < 10 or 
-                full_mod_win_clean.shape[0] == 0):
-                continue
-
-            if (np.all(calib_mod_win_clean == calib_mod_win_clean[0], axis=0).any() or 
-                np.all(calib_obs_win_clean == calib_obs_win_clean[0], axis=0).any()):
-                mean_diff = np.nanmean(calib_obs_win_clean, axis=0) - np.nanmean(calib_mod_win_clean, axis=0)
-                corrected_full = full_mod_win_clean + mean_diff
-            else:
-                try:
-                    dotc = dOTC(bin_width=None, bin_origin=None)
-                    dotc.fit(calib_obs_win_clean, calib_mod_win_clean, full_mod_win_clean)
-                    corrected_full = dotc.predict(full_mod_win_clean)
-                    if (corrected_full is None or np.all(np.isnan(corrected_full)) or 
-                        corrected_full.shape != full_mod_win_clean.shape):
-                        raise ValueError("invalid OP")
-                except (ValueError, RuntimeError, np.linalg.LinAlgError):
-                    mean_diff = np.nanmean(calib_obs_win_clean, axis=0) - np.nanmean(calib_mod_win_clean, axis=0)
-                    corrected_full = full_mod_win_clean + mean_diff
-
-            full_indices = np.where(full_mask)[0]
-            valid_indices = full_indices[valid_pred_mask]
-            for k, idx in enumerate(valid_indices):
-                full_corrected_stack[idx, :] = corrected_full[k, :]
-        return full_corrected_stack
-
-    print(f"bivariate dOTC for:\n  {tas_path}\n  {precip_path}")
-
-    
-    
-    
-    cell_pairs = [(i, j) for i in range(model_datasets[0].shape[1]) for j in range(model_datasets[0].shape[2])]
-
-    results = Parallel(n_jobs=4)(
-        delayed(process_cell)(i, j)
-        for i, j in tqdm(cell_pairs, desc="Processing cells")
+    full_doys = np.fromiter(
+        (get_doy(d) for d in target_times_np),
+        dtype=np.int16,
+        count=target_times_np.size,
     )
 
-    corrected_data = {var: np.full(model_datasets[0].shape, np.nan, dtype=np.float32) for var in var_names}
+    full_indices_by_doy = [np.empty(0, dtype=np.int32) for _ in range(367)]
+    for doy in range(1, 367):
+        full_indices_by_doy[doy] = np.where(full_doys == doy)[0]
 
-    idx = 0
-    
-    
+    if calib_dates.size == 0:
+        return {
+            "has_calibration": False,
+            "calib_model_indices": np.empty(0, dtype=np.int32),
+            "calib_obs_indices": np.empty(0, dtype=np.int32),
+            "calib_window_masks": [np.zeros(0, dtype=bool) for _ in range(367)],
+            "full_indices_by_doy": full_indices_by_doy,
+        }
 
-    for i in range(model_datasets[0].shape[1]):
-        for j in range(model_datasets[0].shape[2]):
-            cell_result = results[idx]
-            if cell_result is not None and not np.all(np.isnan(cell_result)):
-                for v, var in enumerate(var_names):
-                    corrected_data[var][:, i, j] = cell_result[:, v]
-            idx += 1
+    calib_model_indices = np.where(np.isin(hist_times_np, calib_dates))[0]
+    calib_obs_indices = np.where(np.isin(obs_times_np, calib_dates))[0]
 
-    out_ds = xr.open_dataset(tas_path, decode_times=True, use_cftime=True)
-    out_ds = filter_valid_dates(out_ds)
-    out_ds["tas"] = (("time", "N", "E"), corrected_data["tas"])
+    calib_doys = np.fromiter(
+        (get_doy(d) for d in calib_dates),
+        dtype=np.int16,
+        count=calib_dates.size,
+    )
+
+    calib_window_masks = [np.zeros(calib_dates.size, dtype=bool) for _ in range(367)]
+    for doy in range(1, 367):
+        window_diffs = (calib_doys - doy + 366) % 366
+        calib_window_masks[doy] = (window_diffs <= 45) | (window_diffs >= (366 - 45))
+
+    return {
+        "has_calibration": True,
+        "calib_model_indices": calib_model_indices,
+        "calib_obs_indices": calib_obs_indices,
+        "calib_window_masks": calib_window_masks,
+        "full_indices_by_doy": full_indices_by_doy,
+    }
+
+
+def correct_cell(
+    hist_tas_calib_cell,
+    hist_pr_calib_cell,
+    target_tas_cell,
+    target_pr_cell,
+    obs_tas_calib_cell,
+    obs_pr_calib_cell,
+    time_meta,
+):
+    full_mod_stack = np.column_stack((target_tas_cell, target_pr_cell)).astype(
+        np.float32, copy=False
+    )
+    full_corrected_stack = np.full_like(full_mod_stack, np.nan, dtype=np.float32)
+
+    nan_fraction = np.isnan(full_mod_stack).sum() / full_mod_stack.size
+    if nan_fraction > 0.7 or not time_meta["has_calibration"]:
+        return full_corrected_stack
+
+    calib_mod_stack = np.column_stack((hist_tas_calib_cell, hist_pr_calib_cell)).astype(
+        np.float32, copy=False
+    )
+    calib_obs_stack = np.column_stack((obs_tas_calib_cell, obs_pr_calib_cell)).astype(
+        np.float32, copy=False
+    )
+
+    for doy in range(1, 367):
+        window_mask = time_meta["calib_window_masks"][doy]
+        full_indices = time_meta["full_indices_by_doy"][doy]
+
+        if full_indices.size == 0 or not np.any(window_mask):
+            continue
+
+        calib_mod_win = calib_mod_stack[window_mask]
+        calib_obs_win = calib_obs_stack[window_mask]
+        full_mod_win_for_pred = full_mod_stack[full_indices]
+
+        if (
+            calib_mod_win.shape[0] == 0
+            or calib_obs_win.shape[0] == 0
+            or full_mod_win_for_pred.shape[0] == 0
+        ):
+            continue
+
+        valid_calib_mask = ~(
+            np.isnan(calib_mod_win).any(axis=1) | np.isnan(calib_obs_win).any(axis=1)
+        )
+        valid_pred_mask = ~np.isnan(full_mod_win_for_pred).any(axis=1)
+
+        calib_mod_win_clean = calib_mod_win[valid_calib_mask]
+        calib_obs_win_clean = calib_obs_win[valid_calib_mask]
+        full_mod_win_clean = full_mod_win_for_pred[valid_pred_mask]
+
+        if calib_mod_win_clean.shape[0] < 10 or full_mod_win_clean.shape[0] == 0:
+            continue
+
+
+        dotc_model = dOTC(bin_width=None, bin_origin=None)
+        dotc_model.fit(
+                calib_obs_win_clean,
+                    calib_mod_win_clean,
+                    full_mod_win_clean,
+                )
+        corrected_full = dotc_model.predict(full_mod_win_clean)
+
+
+
+        valid_indices = full_indices[valid_pred_mask]
+        full_corrected_stack[valid_indices, :] = corrected_full
+
+    return full_corrected_stack
+
+
+def process_tile(
+    row_start,
+    row_end,
+    hist_tas_calib_np,
+    hist_pr_calib_np,
+    target_tas_np,
+    target_pr_np,
+    obs_tas_calib_np,
+    obs_pr_calib_np,
+    time_meta,
+):
+    ntime = target_tas_np.shape[0]
+    nE = target_tas_np.shape[2]
+    nrows = row_end - row_start
+
+    corrected_tas_tile = np.full((ntime, nrows, nE), np.nan, dtype=np.float32)
+    corrected_pr_tile = np.full((ntime, nrows, nE), np.nan, dtype=np.float32)
+
+    for local_i, i in enumerate(range(row_start, row_end)):
+        for j in range(nE):
+            cell_result = correct_cell(
+                hist_tas_calib_np[:, i, j],
+                hist_pr_calib_np[:, i, j],
+                target_tas_np[:, i, j],
+                target_pr_np[:, i, j],
+                obs_tas_calib_np[:, i, j],
+                obs_pr_calib_np[:, i, j],
+                time_meta,
+            )
+
+            if not np.all(np.isnan(cell_result)):
+                corrected_tas_tile[:, local_i, j] = cell_result[:, 0]
+                corrected_pr_tile[:, local_i, j] = cell_result[:, 1]
+
+    return row_start, row_end, corrected_tas_tile, corrected_pr_tile
+
+
+def bivariate_dotc(
+    historical_tas_path,
+    historical_pr_path,
+    target_tas_path,
+    target_pr_path,
+    obs_tas,
+    obs_pr,
+    out_tas_path,
+    out_pr_path,
+    n_jobs,
+    tile_rows,
+):
+    print(f"Processing:\n  {target_tas_path}\n  {target_pr_path}")
+
+
+
+    hist_tas_ds = open_ds(historical_tas_path)
+    hist_pr_ds = open_ds(historical_pr_path)
+    target_tas_ds = open_ds(target_tas_path)
+    target_pr_ds = open_ds(target_pr_path)
+
+
+
+
+    hist_tas = hist_tas_ds["tas"]
+    hist_pr = hist_pr_ds["pr"]
+    target_tas = target_tas_ds["tas"]
+    target_pr = target_pr_ds["pr"]
+
+
+    hist_tas_np = np.asarray(hist_tas.values, dtype=np.float32)
+    hist_pr_np = np.asarray(hist_pr.values, dtype=np.float32)
+    target_tas_np = np.asarray(target_tas.values, dtype=np.float32)
+    target_pr_np = np.asarray(target_pr.values, dtype=np.float32)
+    obs_tas_np = np.asarray(obs_tas.values, dtype=np.float32)
+    obs_pr_np = np.asarray(obs_pr.values, dtype=np.float32)
+
+    time_meta = metadata(
+        hist_tas["time"].values,
+        target_tas["time"].values,
+        obs_tas["time"].values,
+    )
+
+    hist_tas_calib_np = hist_tas_np[time_meta["calib_model_indices"]]
+    hist_pr_calib_np = hist_pr_np[time_meta["calib_model_indices"]]
+    obs_tas_calib_np = obs_tas_np[time_meta["calib_obs_indices"]]
+    obs_pr_calib_np = obs_pr_np[time_meta["calib_obs_indices"]]
+
+    ntime, nN, nE = target_tas_np.shape
+    corrected_tas = np.full((ntime, nN, nE), np.nan, dtype=np.float32)
+    corrected_pr = np.full((ntime, nN, nE), np.nan, dtype=np.float32)
+
+    row_tiles = [
+        (row_start, min(row_start + tile_rows, nN))
+        for row_start in range(0, nN, tile_rows)
+    ]
+
+    results = Parallel(n_jobs=n_jobs)(
+        delayed(process_tile)(
+            row_start,
+            row_end,
+            hist_tas_calib_np,
+            hist_pr_calib_np,
+            target_tas_np,
+            target_pr_np,
+            obs_tas_calib_np,
+            obs_pr_calib_np,
+            time_meta,
+        )
+        for row_start, row_end in tqdm(row_tiles, desc="Processing row tiles")
+    )
+
+
+    for row_start, row_end, tas_tile, pr_tile in results:
+        corrected_tas[:, row_start:row_end, :] = tas_tile
+        corrected_pr[:, row_start:row_end, :] = pr_tile
+
+    corrected_tas = np.where(np.isnan(target_tas_np), np.nan, corrected_tas).astype(
+        np.float32
+    )
+    corrected_pr = np.where(np.isnan(target_pr_np), np.nan, corrected_pr).astype(
+        np.float32
+    )
+
+    out_tas_ds = target_tas_ds.copy()
+    out_tas_ds["tas"] = (target_tas.dims, corrected_tas)
+
+    out_pr_ds = target_pr_ds.copy()
+    out_pr_ds["pr"] = (target_pr.dims, corrected_pr)
+
     os.makedirs(os.path.dirname(out_tas_path), exist_ok=True)
-    out_ds.to_netcdf(out_tas_path)
-    out_ds.close()
+    os.makedirs(os.path.dirname(out_pr_path), exist_ok=True)
 
-    out_ds = xr.open_dataset(precip_path, decode_times=True, use_cftime=True)
-    out_ds = filter_valid_dates(out_ds)
-    out_ds["pr"] = (("time", "N", "E"), corrected_data["pr"])
-    os.makedirs(os.path.dirname(out_precip_path), exist_ok=True)
-    out_ds.to_netcdf(out_precip_path)
-    out_ds.close()
+    out_tas_ds.to_netcdf(out_tas_path)
+    out_pr_ds.to_netcdf(out_pr_path)
 
+    hist_tas_ds.close()
+    hist_pr_ds.close()
+    target_tas_ds.close()
+    target_pr_ds.close()
+    out_tas_ds.close()
+    out_pr_ds.close()
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--n_jobs", type=int, default=8)
+    parser.add_argument("--tile_rows", type=int, default=4)
+    args = parser.parse_args()
+
+    print("dOTC all cells started")
+
+    obs_tas_ds = open_ds(f"{config.TARGET_DIR}/TabsD_1971_2023.nc")
+    obs_pr_ds = open_ds(f"{config.TARGET_DIR}/RhiresD_1971_2023.nc")
+
+    obs_tas = obs_tas_ds["TabsD"]
+    obs_pr = obs_pr_ds["RhiresD"]
 
 
 
 
 
+    gcm_list = ["EC-Earth3-Veg", "MPI-ESM1-2-HR", "NorESM2-MM"]
 
-
-    tas_dir = f"{config.MODELS_RUNS_EUROCORDEX_11_RCP45}/tas_Swiss/"
-    precip_dir = f"{config.MODELS_RUNS_EUROCORDEX_11_RCP45}/pr_Swiss/"
-    obs_tas_path = f"{config.DATASETS_TRAINING_DIR}/TabsD_step2_coarse.nc"
-    obs_precip_path = f"{config.DATASETS_TRAINING_DIR}/RhiresD_step2_coarse.nc"
-    bc_dir = f"{config.BIAS_CORRECTED_DIR}/dOTC/"
-    tas_files = sorted(glob.glob(f"{tas_dir}/**/*.nc", recursive=True))
-    precip_files = sorted(glob.glob(f"{precip_dir}/**/*.nc", recursive=True))
-
-
-
-    def get_id(path, var_prefix):
-
-
-        fname = os.path.basename(path)
-        return fname.replace(f"{var_prefix}_day_", "")
-
-
-
-    precip_dict = {get_id(f, "pr"): f for f in precip_files}
-
-    for tas_path in tqdm(tas_files, desc="Processing model chains"):
-        
-        
-        tas_id = get_id(tas_path, "tas")
-        pr_path = precip_dict.get(tas_id, None)
-
-        if pr_path is None:
-
-            print(f"Warning: No matching pr file for {tas_path}, skipping.")
-            continue
-
-
-        rel_path = os.path.relpath(tas_path, tas_dir)
-        out_tas_path = os.path.join(bc_dir, "tas", rel_path)
-        out_pr_path = os.path.join(bc_dir, "pr", os.path.relpath(pr_path, precip_dir))
-        
-#For multiple runs over >3 days, adding a check so it skips files already presemt xxxxxxxxxxxxxxx
-#on an average, corrects 2 model chains per day (including application of transfer fuznction to entire chainxxxxxxxxx)
-        if os.path.exists(out_tas_path) and os.path.exists(out_pr_path):
-            print(f"Skipping already processed files:\n  {out_tas_path}\n  {out_pr_path}")
-            continue
-        
-        bivariate_dotc(
-            tas_path, pr_path, obs_tas_path, obs_precip_path,
-            out_tas_path, out_pr_path
+    for gcm in gcm_list:
+        historical_tas_path = (
+            f"{config.ALPFINE_DIR}/Bilinear/{gcm}/historical/"
+            f"r1i1p1f1/RegCM5-0/v1-r1/day/tas/v20250415/"
+            f"{gcm}_historical_tas_bilinear.nc"
+        )
+        historical_pr_path = (
+            f"{config.ALPFINE_DIR}/Bilinear/{gcm}/historical/"
+            f"r1i1p1f1/RegCM5-0/v1-r1/day/pr/v20250415/"
+            f"{gcm}_historical_pr_bilinear.nc"
         )
 
-    print("MC finished for bivariate temp and precip for RCP4.5")
+        if not os.path.exists(historical_tas_path) or not os.path.exists(historical_pr_path):
+            print(f"Missing historical calibration files for {gcm}")
+            continue
+
+        for time in ["historical", "ssp370"]:
+            target_tas_path = (
+                f"{config.ALPFINE_DIR}/Bilinear/{gcm}/{time}/"
+                f"r1i1p1f1/RegCM5-0/v1-r1/day/tas/v20250415/"
+                f"{gcm}_{time}_tas_bilinear.nc"
+            )
+            target_pr_path = (
+                f"{config.ALPFINE_DIR}/Bilinear/{gcm}/{time}/"
+                f"r1i1p1f1/RegCM5-0/v1-r1/day/pr/v20250415/"
+                f"{gcm}_{time}_pr_bilinear.nc"
+            )
+
+            if not os.path.exists(target_tas_path) or not os.path.exists(target_pr_path):
+                print(f"Missing target files for {gcm} {time}")
+                continue
+
+            out_tas_path = (
+                f"{config.ALPFINE_DIR}/BC/dOTC/{gcm}/{time}/"
+                f"r1i1p1f1/RegCM5-0/v1-r1/day/tas/v20250415/"
+                f"{gcm}_{time}_tas_dOTC.nc"
+            )
+            out_pr_path = (
+                f"{config.ALPFINE_DIR}/BC/dOTC/{gcm}/{time}/"
+                f"r1i1p1f1/RegCM5-0/v1-r1/day/pr/v20250415/"
+                f"{gcm}_{time}_pr_dOTC.nc"
+            )
+
+            if os.path.exists(out_tas_path) and os.path.exists(out_pr_path):
+                print(f"Skipping existing outputs for {gcm} {time}")
+                continue
+
+            try:
+                bivariate_dotc(
+                    historical_tas_path,
+                    historical_pr_path,
+                    target_tas_path,
+                    target_pr_path,
+                    obs_tas,
+                    obs_pr,
+                    out_tas_path,
+                    out_pr_path,
+                    args.n_jobs,
+                    args.tile_rows,
+                )
+                print(f"Saved dOTC outputs for {gcm} {time}")
+            except Exception as e:
+                print(f"Error for {gcm} {time}: {e}")
+
+    obs_tas_ds.close()
+    obs_pr_ds.close()
+
+    print("dOTC all cells finished")
+
 
 if __name__ == "__main__":
     main()
