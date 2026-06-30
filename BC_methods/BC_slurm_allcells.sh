@@ -1,11 +1,11 @@
 #!/bin/bash
-#SBATCH --job-name=EQM_BC_taspr
-#SBATCH --output=logs/bc/EQM_BC_output-%j.txt
-#SBATCH --error=logs/bc/EQM_BC_job_error-%j.txt
+#SBATCH --job-name=CDFt_Coarse_BC
+#SBATCH --output=logs/bc/CDFt_BC_output-%j.log
+#SBATCH --error=logs/bc/CDFt_BC_error-%j.log
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
-#SBATCH --time=3-00:00:00
-#SBATCH --mem=128G
+#SBATCH --time=01-00:00:00
+#SBATCH --mem=256G
 #SBATCH --partition=cpu
 
 module load python
@@ -16,9 +16,6 @@ export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
 export MKL_NUM_THREADS=$SLURM_CPUS_PER_TASK
 export NUMEXPR_NUM_THREADS=$SLURM_CPUS_PER_TASK
 
-
-echo "EQM for All Cells started"
-python EQM_BC_allcells.py --n_jobs $SLURM_CPUS_PER_TASK
-echo "EQM for All Cells finished"
-
-
+echo "CDFt Coarse for All Cells started"
+python CDFt_BC_allcells.py --n_jobs $SLURM_CPUS_PER_TASK
+echo "CDFt Coarse for all cells finished"
