@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 import warnings
 import argparse
+import time
 
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("MKL_NUM_THREADS", "1")
@@ -16,14 +17,21 @@ from SBCK import dOTC
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 
+def seconds_to_minutes(seconds):
+    return seconds / 60.0
+
+
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--n_jobs", type=int, default=1)
+    parser.add_argument("--n_jobs", type=int, default=-1)
     return parser.parse_args()
 
 
 def get_doy(d):
-    return (np.datetime64(d, "D") - np.datetime64(str(d)[:4] + "-01-01", "D")).astype(int) + 1
+    return (
+        np.datetime64(d, "D")
+        - np.datetime64(str(d)[:4] + "-01-01", "D")
+    ).astype(int) + 1
 
 
 def _to_valid_datetime64(ds, var_name):
@@ -46,12 +54,23 @@ def _to_valid_datetime64(ds, var_name):
 
 
 def _resolve_model_file(base_dir, gcm, period, var):
-    p = base_dir / gcm / period / "r1i1p1f1" / "RegCM5-0" / "v1-r1" / "day" / var / "v20250415"
+    p = (
+        base_dir
+        / gcm
+        / period
+        / "r1i1p1f1"
+        / "RegCM5-0"
+        / "v1-r1"
+        / "day"
+        / var
+        / "v20250415"
+    )
 
     if not p.exists():
         return None
 
     exact = p / f"{gcm}_{period}_{var}_Swiss.nc"
+
     if exact.exists():
         return exact
 
@@ -72,27 +91,42 @@ def dotc_cell(
     target_times,
     obs_times,
 ):
-    
-
-
-
     ntime = target_tas.shape[0]
     out = np.full((ntime, 2), np.nan, dtype=np.float32)
 
+    correction_obtaining_seconds = 0.0
+    correction_applying_seconds = 0.0
+
     full_mod = np.stack([target_tas, target_pr], axis=1)
+
     if np.isnan(full_mod).sum() / full_mod.size > 0.7:
-        return out[:, 0], out[:, 1]
+        return (
+            out[:, 0],
+            out[:, 1],
+            correction_obtaining_seconds,
+            correction_applying_seconds,
+        )
 
     calib_times_np = np.array(calib_times, dtype="datetime64[D]")
     target_times_np = np.array(target_times, dtype="datetime64[D]")
     obs_times_np = np.array(obs_times, dtype="datetime64[D]")
 
-    m_cal = calib_times_np[(calib_times_np >= calib_start) & (calib_times_np <= calib_end)]
-    o_cal = obs_times_np[(obs_times_np >= calib_start) & (obs_times_np <= calib_end)]
+    m_cal = calib_times_np[
+        (calib_times_np >= calib_start) & (calib_times_np <= calib_end)
+    ]
+    o_cal = obs_times_np[
+        (obs_times_np >= calib_start) & (obs_times_np <= calib_end)
+    ]
+
     calib_dates = np.intersect1d(m_cal, o_cal)
 
     if calib_dates.size < 30:
-        return out[:, 0], out[:, 1]
+        return (
+            out[:, 0],
+            out[:, 1],
+            correction_obtaining_seconds,
+            correction_applying_seconds,
+        )
 
     m_mask = np.isin(calib_times_np, calib_dates)
     o_mask = np.isin(obs_times_np, calib_dates)
@@ -104,15 +138,19 @@ def dotc_cell(
     full_doys = np.array([get_doy(d) for d in target_times_np])
 
     for doy in range(1, 367):
+        obtaining_start = time.perf_counter()
+
         wd = (calib_doys - doy + 366) % 366
         wmask = (wd <= 45) | (wd >= (366 - 45))
 
         cm = calib_mod[wmask]
         co = calib_obs[wmask]
+
         fmask = full_doys == doy
         fm = full_mod[fmask]
 
         if cm.shape[0] == 0 or co.shape[0] == 0 or fm.shape[0] == 0:
+            correction_obtaining_seconds += time.perf_counter() - obtaining_start
             continue
 
         valid_cal = ~(np.isnan(cm).any(axis=1) | np.isnan(co).any(axis=1))
@@ -123,6 +161,7 @@ def dotc_cell(
         fm_clean = fm[valid_pred]
 
         if cm.shape[0] < 10 or fm_clean.shape[0] == 0:
+            correction_obtaining_seconds += time.perf_counter() - obtaining_start
             continue
 
         if (
@@ -133,14 +172,28 @@ def dotc_cell(
             or np.unique(fm_clean[:, 0]).size < 2
             or np.unique(fm_clean[:, 1]).size < 2
         ):
+            correction_obtaining_seconds += time.perf_counter() - obtaining_start
             continue
 
         try:
             model = dOTC(bin_width=None, bin_origin=None)
             model.fit(co, cm, fm_clean)
+        except Exception:
+            correction_obtaining_seconds += time.perf_counter() - obtaining_start
+            continue
+
+        correction_obtaining_seconds += time.perf_counter() - obtaining_start
+
+        applying_start = time.perf_counter()
+
+        try:
             corrected = model.predict(fm_clean)
 
-            if corrected is None or corrected.shape != fm_clean.shape or np.all(np.isnan(corrected)):
+            if (
+                corrected is None
+                or corrected.shape != fm_clean.shape
+                or np.all(np.isnan(corrected))
+            ):
                 raise RuntimeError("invalid dOTC output")
 
             corrected = corrected.astype(np.float32, copy=False)
@@ -149,12 +202,22 @@ def dotc_cell(
             out[out_idx[valid_pred], :] = corrected
 
         except Exception:
+            correction_applying_seconds += time.perf_counter() - applying_start
             continue
 
-    return out[:, 0], out[:, 1]
+        correction_applying_seconds += time.perf_counter() - applying_start
+
+    return (
+        out[:, 0],
+        out[:, 1],
+        correction_obtaining_seconds,
+        correction_applying_seconds,
+    )
 
 
 def main():
+    script_start = time.perf_counter()
+
     print("dOTC coarse all cells started")
 
     args = parse_args()
@@ -162,19 +225,26 @@ def main():
     RESUME = True
     calib_start = np.datetime64("1981-01-01")
     calib_end = np.datetime64("2010-12-31")
-    n_jobs = max(1, args.n_jobs)
+    n_jobs = args.n_jobs
 
     root = Path(__file__).resolve().parents[3]
-    obs_tas_path = root / "Downscaling/Downscaling_Models/Dataset_Setup_I_Chronological_12km/TabsD_step2_coarse.nc"
-    obs_pr_path = root / "Downscaling/Downscaling_Models/Dataset_Setup_I_Chronological_12km/RhiresD_step2_coarse.nc"
+
+    obs_tas_path = (
+        root
+        / "Downscaling/Downscaling_Models/Dataset_Setup_I_Chronological_12km/"
+        / "TabsD_step2_coarse.nc"
+    )
+    obs_pr_path = (
+        root
+        / "Downscaling/Downscaling_Models/Dataset_Setup_I_Chronological_12km/"
+        / "RhiresD_step2_coarse.nc"
+    )
+
     model_root = root / "Downscaling/GCM_pipeline/ALP-FINEv1.0/Swiss"
     out_root = root / "Downscaling/GCM_pipeline/ALP-FINEv1.0/BC/dOTC_Coarse"
 
     gcms = ["EC-Earth3-Veg", "MPI-ESM1-2-HR", "NorESM2-MM"]
     periods = ["historical", "ssp370"]
-
-
-
 
     jobs_by_gcm = {}
 
@@ -192,6 +262,7 @@ def main():
 
             tas_out_dir = out_root / tas_rel
             pr_out_dir = out_root / pr_rel
+
             tas_out = tas_out_dir / f"{tas_path.stem}_dOTC.nc"
             pr_out = pr_out_dir / f"{pr_path.stem}_dOTC.nc"
 
@@ -218,6 +289,10 @@ def main():
 
     if not jobs_by_gcm:
         print("All requested outputs already exist. Nothing to process.")
+        print(
+            f"Total script runtime: "
+            f"{seconds_to_minutes(time.perf_counter() - script_start):.2f} min"
+        )
         return
 
     obs_ds_tas = xr.open_dataset(obs_tas_path)
@@ -281,6 +356,10 @@ def main():
 
             print(f"Processing: {gcm} {period}")
 
+            run_start = time.perf_counter()
+            correction_obtaining_total_seconds = 0.0
+            correction_applying_total_seconds = 0.0
+
             tds = xr.open_dataset(tas_path, decode_times=True, use_cftime=True)
             pds = xr.open_dataset(pr_path, decode_times=True, use_cftime=True)
 
@@ -323,14 +402,19 @@ def main():
                 & (~np.all(np.isnan(pr_vals), axis=0))
             )
 
-            valid_cols_by_row = [np.flatnonzero(valid_cell_mask[i]) for i in range(nN)]
+            valid_cols_by_row = [
+                np.flatnonzero(valid_cell_mask[i]) for i in range(nN)
+            ]
 
             def process_row(i):
                 row_t = np.full((ntime, nE), np.nan, dtype=np.float32)
                 row_p = np.full((ntime, nE), np.nan, dtype=np.float32)
 
+                row_correction_obtaining_seconds = 0.0
+                row_correction_applying_seconds = 0.0
+
                 for j in valid_cols_by_row[i]:
-                    ct, cp = dotc_cell(
+                    ct, cp, obtain_seconds, apply_seconds = dotc_cell(
                         htas_vals[:, i, j],
                         tas_vals[:, i, j],
                         obs_tas_vals[:, i, j],
@@ -347,11 +431,20 @@ def main():
                     row_t[:, j] = ct
                     row_p[:, j] = cp
 
-                return i, row_t, row_p
+                    row_correction_obtaining_seconds += obtain_seconds
+                    row_correction_applying_seconds += apply_seconds
+
+                return (
+                    i,
+                    row_t,
+                    row_p,
+                    row_correction_obtaining_seconds,
+                    row_correction_applying_seconds,
+                )
 
             row_iter = Parallel(
                 n_jobs=n_jobs,
-                backend="threading",
+                backend="loky",
                 batch_size="auto",
                 verbose=10,
                 return_as="generator",
@@ -359,12 +452,34 @@ def main():
                 delayed(process_row)(i) for i in range(nN)
             )
 
-            for i, rt, rp in row_iter:
+            for (
+                i,
+                rt,
+                rp,
+                row_correction_obtaining_seconds,
+                row_correction_applying_seconds,
+            ) in row_iter:
                 tas_out_vals[:, i, :] = rt
                 pr_out_vals[:, i, :] = rp
 
-            tas_out_vals = np.where(valid_cell_mask[None, :, :], tas_out_vals, np.nan).astype(np.float32)
-            pr_out_vals = np.where(valid_cell_mask[None, :, :], pr_out_vals, np.nan).astype(np.float32)
+                correction_obtaining_total_seconds += (
+                    row_correction_obtaining_seconds
+                )
+                correction_applying_total_seconds += (
+                    row_correction_applying_seconds
+                )
+
+            tas_out_vals = np.where(
+                valid_cell_mask[None, :, :],
+                tas_out_vals,
+                np.nan,
+            ).astype(np.float32)
+
+            pr_out_vals = np.where(
+                valid_cell_mask[None, :, :],
+                pr_out_vals,
+                np.nan,
+            ).astype(np.float32)
 
             os.makedirs(tas_out_dir, exist_ok=True)
             os.makedirs(pr_out_dir, exist_ok=True)
@@ -387,6 +502,18 @@ def main():
             else:
                 print(f"pr already exists, not overwritten: {pr_out}")
 
+            run_total_seconds = time.perf_counter() - run_start
+
+            print(
+                f"Timing summary for {gcm} | tas+pr | {period}:\n"
+                f"  Total runtime per run: "
+                f"{seconds_to_minutes(run_total_seconds):.2f} min\n"
+                f"  Total correction-function obtaining time: "
+                f"{seconds_to_minutes(correction_obtaining_total_seconds):.2f} min\n"
+                f"  Total correction-function applying time: "
+                f"{seconds_to_minutes(correction_applying_total_seconds):.2f} min"
+            )
+
             tdsf.close()
             pdsf.close()
             tds.close()
@@ -404,6 +531,10 @@ def main():
     obs_ds_tas.close()
     obs_ds_pr.close()
 
+    print(
+        f"Total script runtime: "
+        f"{seconds_to_minutes(time.perf_counter() - script_start):.2f} min"
+    )
     print("dOTC coarse all cells finished")
 
 

@@ -1,9 +1,9 @@
 #!/bin/bash
-#SBATCH --job-name=CH2025
-#SBATCH --output=logs/bc/CH2025_BC_output-%j.log
-#SBATCH --error=logs/bc/CH2025_BC_error-%j.log
+#SBATCH --job-name=Compute_BC_CH2025
+#SBATCH --output=logs/bc/Compute_BC_CH2025_output-%j.log
+#SBATCH --error=logs/bc/Compute_BC_CH2025_error-%j.log
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=4
+#SBATCH --cpus-per-task=8
 #SBATCH --time=03-00:00:00
 #SBATCH --mem=256G
 #SBATCH --partition=cpu

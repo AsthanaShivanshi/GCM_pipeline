@@ -3,6 +3,7 @@ import gc
 import argparse
 import importlib.util
 import warnings
+import time
 
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("MKL_NUM_THREADS", "1")
@@ -30,9 +31,13 @@ CALIB_START = np.datetime64("1981-01-01")
 CALIB_END = np.datetime64("2010-12-31")
 
 
+def seconds_to_minutes(seconds):
+    return seconds / 60.0
+
+
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--n_jobs", type=int, default=1)
+    parser.add_argument("--n_jobs", type=int, default=-1)
     return parser.parse_args()
 
 
@@ -98,18 +103,31 @@ def eqm_cell(calib_model_cell, target_model_cell, obs_cell, time_ctx):
     nquant = 99
     corr_by_doy = np.full((366, nquant), np.nan, dtype=np.float32)
 
+    correction_obtaining_seconds = 0.0
+    correction_applying_seconds = 0.0
+
     if (
         ntime == 0
         or np.all(np.isnan(target_model_cell))
         or np.all(np.isnan(calib_model_cell))
         or np.all(np.isnan(obs_cell))
     ):
-        return qm_series, corr_by_doy
+        return (
+            qm_series,
+            corr_by_doy,
+            correction_obtaining_seconds,
+            correction_applying_seconds,
+        )
 
     common_dates = time_ctx["common_dates"]
 
     if len(common_dates) == 0:
-        return qm_series, corr_by_doy
+        return (
+            qm_series,
+            corr_by_doy,
+            correction_obtaining_seconds,
+            correction_applying_seconds,
+        )
 
     calib_mod_cell = calib_model_cell[time_ctx["model_common_idx"]]
     calib_obs_cell = obs_cell[time_ctx["obs_common_idx"]]
@@ -120,9 +138,16 @@ def eqm_cell(calib_model_cell, target_model_cell, obs_cell, time_ctx):
     calib_doys = time_ctx["common_doys"][joint_valid]
 
     if calib_mod_cell.size == 0 or calib_obs_cell.size == 0:
-        return qm_series, corr_by_doy
+        return (
+            qm_series,
+            corr_by_doy,
+            correction_obtaining_seconds,
+            correction_applying_seconds,
+        )
 
     for doy in range(1, 367):
+        obtaining_start = time.perf_counter()
+
         window_doys = ((calib_doys - doy + 366) % 366)
         window_mask = (window_doys <= 45) | (window_doys >= (366 - 45))
 
@@ -134,6 +159,7 @@ def eqm_cell(calib_model_cell, target_model_cell, obs_cell, time_ctx):
         mod_window = mod_window[joint_window_valid]
 
         if obs_window.size == 0 or mod_window.size == 0:
+            correction_obtaining_seconds += time.perf_counter() - obtaining_start
             continue
 
         mod_q_inner = np.quantile(mod_window, QUANTILES_INNER)
@@ -155,20 +181,27 @@ def eqm_cell(calib_model_cell, target_model_cell, obs_cell, time_ctx):
             fill_value="extrapolate",
         )
 
+        mod_q = np.quantile(mod_window, QUANTILES_101)
+
+        correction_obtaining_seconds += time.perf_counter() - obtaining_start
+
+        applying_start = time.perf_counter()
+
         indices = time_ctx["target_indices_by_doy"][doy - 1]
 
         if indices.size == 0:
+            correction_applying_seconds += time.perf_counter() - applying_start
             continue
 
         values = target_model_cell[indices]
         valid_mask = ~np.isnan(values)
 
         if not np.any(valid_mask):
+            correction_applying_seconds += time.perf_counter() - applying_start
             continue
 
         corrected = np.full(values.shape, np.nan, dtype=np.float32)
 
-        mod_q = np.quantile(mod_window, QUANTILES_101)
         value_quantiles = np.searchsorted(mod_q, values[valid_mask], side="right") / 100.0
         value_quantiles = np.clip(value_quantiles, 0.01, 0.99)
 
@@ -176,12 +209,21 @@ def eqm_cell(calib_model_cell, target_model_cell, obs_cell, time_ctx):
 
         qm_series[indices] = corrected
 
-    return qm_series, corr_by_doy
+        correction_applying_seconds += time.perf_counter() - applying_start
+
+    return (
+        qm_series,
+        corr_by_doy,
+        correction_obtaining_seconds,
+        correction_applying_seconds,
+    )
 
 
 def main():
     args = parse_args()
-    n_jobs = max(1, args.n_jobs)
+    n_jobs = args.n_jobs
+
+    script_start = time.perf_counter()
 
     print("EQM all cells started")
 
@@ -253,6 +295,10 @@ def main():
 
     if not jobs_by_gcm_var:
         print("All requested EQM outputs already exist. Nothing to process.")
+        print(
+            f"Total script runtime: "
+            f"{seconds_to_minutes(time.perf_counter() - script_start):.2f} min"
+        )
         return
 
     obs_ds_tas = xr.open_dataset(f"{config.TARGET_DIR}/TabsD_1971_2023.nc")
@@ -328,6 +374,10 @@ def main():
 
                 print(f"Processing {model_path}")
 
+                run_start = time.perf_counter()
+                correction_obtaining_total_seconds = 0.0
+                correction_applying_total_seconds = 0.0
+
                 model_ds = xr.open_dataset(model_path, decode_times=True, use_cftime=True)
 
                 if model_var_name not in model_ds.data_vars:
@@ -386,8 +436,11 @@ def main():
                     row_qm = np.full((ntime, nE), np.nan, dtype=np.float32)
                     row_corr = np.full((366, 99, nE), np.nan, dtype=np.float32)
 
+                    row_correction_obtaining_seconds = 0.0
+                    row_correction_applying_seconds = 0.0
+
                     for j in valid_cols_by_row[i]:
-                        q, c = eqm_cell(
+                        q, c, obtain_seconds, apply_seconds = eqm_cell(
                             hist_vals[:, i, j],
                             model_vals[:, i, j],
                             obs_vals[:, i, j],
@@ -397,11 +450,20 @@ def main():
                         row_qm[:, j] = q
                         row_corr[:, :, j] = c
 
-                    return i, row_qm, row_corr
+                        row_correction_obtaining_seconds += obtain_seconds
+                        row_correction_applying_seconds += apply_seconds
+
+                    return (
+                        i,
+                        row_qm,
+                        row_corr,
+                        row_correction_obtaining_seconds,
+                        row_correction_applying_seconds,
+                    )
 
                 row_iter = Parallel(
                     n_jobs=n_jobs,
-                    backend="threading",
+                    backend="loky",
                     batch_size="auto",
                     verbose=10,
                     return_as="generator",
@@ -409,9 +471,18 @@ def main():
                     delayed(process_row)(i) for i in range(nN)
                 )
 
-                for i, row_qm, row_corr in row_iter:
+                for (
+                    i,
+                    row_qm,
+                    row_corr,
+                    row_correction_obtaining_seconds,
+                    row_correction_applying_seconds,
+                ) in row_iter:
                     qm_data[:, i, :] = row_qm
                     corr_data[:, :, i, :] = row_corr
+
+                    correction_obtaining_total_seconds += row_correction_obtaining_seconds
+                    correction_applying_total_seconds += row_correction_applying_seconds
 
                 target_masked_qm = np.where(
                     np.isnan(model_vals),
@@ -447,6 +518,18 @@ def main():
                 corr_ds.to_netcdf(corr_output_path)
                 print(f"Saved corrfx to {corr_output_path}")
 
+                run_total_seconds = time.perf_counter() - run_start
+
+                print(
+                    f"Timing summary for {gcm} | {var} | {period}:\n"
+                    f"  Total runtime per run: "
+                    f"{seconds_to_minutes(run_total_seconds):.2f} min\n"
+                    f"  Total correction-function obtaining time: "
+                    f"{seconds_to_minutes(correction_obtaining_total_seconds):.2f} min\n"
+                    f"  Total correction-function applying time: "
+                    f"{seconds_to_minutes(correction_applying_total_seconds):.2f} min"
+                )
+
                 corr_ds.close()
                 out_ds.close()
                 model_ds_filtered.close()
@@ -474,6 +557,10 @@ def main():
     obs_ds_tas.close()
     obs_ds_pr.close()
 
+    print(
+        f"Total script runtime: "
+        f"{seconds_to_minutes(time.perf_counter() - script_start):.2f} min"
+    )
     print("EQM all cells finished")
 
 

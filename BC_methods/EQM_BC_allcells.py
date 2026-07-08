@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 import importlib.util
 import warnings
+import time
 
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("MKL_NUM_THREADS", "1")
@@ -24,6 +25,10 @@ from scipy.interpolate import interp1d
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 
+def seconds_to_minutes(seconds):
+    return seconds / 60.0
+
+
 def eqm_cell(
     calib_model_cell,
     target_model_cell,
@@ -40,30 +45,47 @@ def eqm_cell(
     nquant = 99
     corr_by_doy = np.full((366, nquant), np.nan, dtype=np.float32)
 
+    correction_obtaining_seconds = 0.0
+    correction_applying_seconds = 0.0
+
     if (
         ntime == 0
         or np.all(np.isnan(target_model_cell))
         or np.all(np.isnan(calib_model_cell))
         or np.all(np.isnan(obs_cell))
     ):
-        return qm_series, corr_by_doy
+        return (
+            qm_series,
+            corr_by_doy,
+            correction_obtaining_seconds,
+            correction_applying_seconds,
+        )
 
     calib_model_dates = np.array(calib_model_times, dtype="datetime64[D]")
     target_model_dates = np.array(target_model_times, dtype="datetime64[D]")
     obs_dates = np.array(obs_times, dtype="datetime64[D]")
 
     calib_dates = np.arange(
-        calib_start, calib_end + np.timedelta64(1, "D"), dtype="datetime64[D]"
+        calib_start,
+        calib_end + np.timedelta64(1, "D"),
+        dtype="datetime64[D]",
     )
 
     model_calib_idx = np.isin(calib_model_dates, calib_dates)
     obs_calib_idx = np.isin(obs_dates, calib_dates)
 
     common_dates = np.intersect1d(
-        calib_model_dates[model_calib_idx], obs_dates[obs_calib_idx]
+        calib_model_dates[model_calib_idx],
+        obs_dates[obs_calib_idx],
     )
+
     if len(common_dates) == 0:
-        return qm_series, corr_by_doy
+        return (
+            qm_series,
+            corr_by_doy,
+            correction_obtaining_seconds,
+            correction_applying_seconds,
+        )
 
     model_common_idx = np.isin(calib_model_dates, common_dates)
     obs_common_idx = np.isin(obs_dates, common_dates)
@@ -76,6 +98,14 @@ def eqm_cell(
     calib_obs_cell = calib_obs_cell[joint_valid]
     common_dates = common_dates[joint_valid]
 
+    if calib_mod_cell.size == 0 or calib_obs_cell.size == 0:
+        return (
+            qm_series,
+            corr_by_doy,
+            correction_obtaining_seconds,
+            correction_applying_seconds,
+        )
+
     def get_doy(d):
         return (
             np.datetime64(d, "D") - np.datetime64(str(d)[:4] + "-01-01", "D")
@@ -87,6 +117,8 @@ def eqm_cell(
     quantiles_inner = np.linspace(0.01, 0.99, 99)
 
     for doy in range(1, 367):
+        obtaining_start = time.perf_counter()
+
         window_doys = ((calib_doys - doy + 366) % 366)
         window_mask = (window_doys <= 45) | (window_doys >= (366 - 45))
 
@@ -98,6 +130,7 @@ def eqm_cell(
         mod_window = mod_window[joint_window_valid]
 
         if obs_window.size == 0 or mod_window.size == 0:
+            correction_obtaining_seconds += time.perf_counter() - obtaining_start
             continue
 
         mod_q_inner = np.quantile(mod_window, quantiles_inner)
@@ -119,26 +152,44 @@ def eqm_cell(
             fill_value="extrapolate",
         )
 
+        mod_q = np.quantile(mod_window, np.linspace(0, 1, 101))
+
+        correction_obtaining_seconds += time.perf_counter() - obtaining_start
+
+        applying_start = time.perf_counter()
+
         indices = np.where(target_doys == doy)[0]
+
         if indices.size == 0:
+            correction_applying_seconds += time.perf_counter() - applying_start
             continue
 
         values = target_model_cell[indices]
         valid_mask = ~np.isnan(values)
+
         if not np.any(valid_mask):
+            correction_applying_seconds += time.perf_counter() - applying_start
             continue
 
         corrected = np.full(values.shape, np.nan, dtype=np.float32)
-        mod_q = np.quantile(mod_window, np.linspace(0, 1, 101))
+
         value_quantiles = (
             np.searchsorted(mod_q, values[valid_mask], side="right") / 100.0
         )
         value_quantiles = np.clip(value_quantiles, 0.01, 0.99)
+
         corrected[valid_mask] = values[valid_mask] + interp_corr(value_quantiles)
 
         qm_series[indices] = corrected
 
-    return qm_series, corr_by_doy
+        correction_applying_seconds += time.perf_counter() - applying_start
+
+    return (
+        qm_series,
+        corr_by_doy,
+        correction_obtaining_seconds,
+        correction_applying_seconds,
+    )
 
 
 def _to_valid_datetime64(ds, var_name):
@@ -174,13 +225,11 @@ def _resolve_model_file(base_dir, gcm, period, var):
         / "v20250415"
     )
 
-
     if not preferred.exists():
         return None
 
     exact = preferred / f"{gcm}_{period}_{var}_Swiss.nc"
-    
-    
+
     if exact.exists():
         return exact
 
@@ -194,6 +243,8 @@ def _resolve_model_file(base_dir, gcm, period, var):
 
 
 def main():
+    script_start = time.perf_counter()
+
     print("EQM coarse-scale all cells started")
 
     RESUME = True
@@ -202,8 +253,14 @@ def main():
 
     workspace_root = Path(__file__).resolve().parents[3]
 
-    obs_tas_path = workspace_root / "Downscaling/Downscaling_Models/Dataset_Setup_I_Chronological_12km/TabsD_step2_coarse.nc"
-    obs_pr_path = workspace_root / "Downscaling/Downscaling_Models/Dataset_Setup_I_Chronological_12km/RhiresD_step2_coarse.nc"
+    obs_tas_path = (
+        workspace_root
+        / "Downscaling/Downscaling_Models/Dataset_Setup_I_Chronological_12km/TabsD_step2_coarse.nc"
+    )
+    obs_pr_path = (
+        workspace_root
+        / "Downscaling/Downscaling_Models/Dataset_Setup_I_Chronological_12km/RhiresD_step2_coarse.nc"
+    )
 
     model_root = workspace_root / "Downscaling/GCM_pipeline/ALP-FINEv1.0/Swiss"
     out_root = workspace_root / "Downscaling/GCM_pipeline/ALP-FINEv1.0/BC/EQM_Coarse"
@@ -215,26 +272,29 @@ def main():
     model_var_map = {"tas": "tas", "pr": "pr"}
 
     for gcm in ["EC-Earth3-Veg", "MPI-ESM1-2-HR", "NorESM2-MM"]:
-
-
         for var in ["tas", "pr"]:
             obs = obs_map[var]
             model_var_name = model_var_map[var]
 
             historical_path = _resolve_model_file(model_root, gcm, "historical", var)
-            
-            
+
             if historical_path is None:
                 print(f"Missing historical calibration file for {gcm} {var}")
                 continue
 
-            hist_ds = xr.open_dataset(historical_path, decode_times=True, use_cftime=True)
+            hist_ds = xr.open_dataset(
+                historical_path,
+                decode_times=True,
+                use_cftime=True,
+            )
+
             if model_var_name not in hist_ds.data_vars:
                 print(f"Variable '{model_var_name}' not found in {historical_path}")
                 hist_ds.close()
                 continue
 
             hist_ds_filtered, hist_da = _to_valid_datetime64(hist_ds, model_var_name)
+
             if hist_ds_filtered is None:
                 print(f"No valid historical times in {historical_path}")
                 hist_ds.close()
@@ -242,6 +302,7 @@ def main():
 
             for period in ["historical", "ssp370"]:
                 model_path = _resolve_model_file(model_root, gcm, period, var)
+
                 if model_path is None:
                     print(f"Missing target file for {gcm} {period} {var}")
                     continue
@@ -249,26 +310,36 @@ def main():
                 rel_dir = model_path.parent.relative_to(model_root)
                 out_dir = out_root / rel_dir
 
-
-
                 src_stem = model_path.stem
                 output_path = out_dir / f"{src_stem}_EQM.nc"
                 corr_output_path = out_dir / f"{src_stem}_EQM_corrfx.nc"
-
-
 
                 if RESUME and output_path.exists() and corr_output_path.exists():
                     print(f"[resume] already done, skipping: {gcm} | {var} | {period}")
                     continue
 
                 print(f"Processing {model_path}")
-                model_ds = xr.open_dataset(model_path, decode_times=True, use_cftime=True)
+
+                run_start = time.perf_counter()
+                correction_obtaining_total_seconds = 0.0
+                correction_applying_total_seconds = 0.0
+
+                model_ds = xr.open_dataset(
+                    model_path,
+                    decode_times=True,
+                    use_cftime=True,
+                )
+
                 if model_var_name not in model_ds.data_vars:
                     print(f"Variable '{model_var_name}' not found in {model_path}")
                     model_ds.close()
                     continue
 
-                model_ds_filtered, model_da = _to_valid_datetime64(model_ds, model_var_name)
+                model_ds_filtered, model_da = _to_valid_datetime64(
+                    model_ds,
+                    model_var_name,
+                )
+
                 if model_ds_filtered is None:
                     print(f"No valid times in {model_path}")
                     model_ds.close()
@@ -285,22 +356,35 @@ def main():
                 model_times = model_da["time"].values
                 obs_times = obs["time"].values
 
-                if obs_vals.shape[1:] != model_vals.shape[1:] or hist_vals.shape[1:] != model_vals.shape[1:]:
-                    raise ValueError(f"Grid mismatch: obs{obs_vals.shape[1:]}, hist{hist_vals.shape[1:]}, model{model_vals.shape[1:]}")
+                if (
+                    obs_vals.shape[1:] != model_vals.shape[1:]
+                    or hist_vals.shape[1:] != model_vals.shape[1:]
+                ):
+                    raise ValueError(
+                        f"Grid mismatch: "
+                        f"obs{obs_vals.shape[1:]}, "
+                        f"hist{hist_vals.shape[1:]}, "
+                        f"model{model_vals.shape[1:]}"
+                    )
 
                 valid_cell_mask = (
                     (~np.all(np.isnan(obs_vals), axis=0))
                     & (~np.all(np.isnan(model_vals), axis=0))
+                    & (~np.all(np.isnan(hist_vals), axis=0))
                 )
-
 
                 def process_row(i):
                     row_qm = np.full((ntime, nE), np.nan, dtype=np.float32)
                     row_corr = np.full((366, 99, nE), np.nan, dtype=np.float32)
+
+                    row_correction_obtaining_seconds = 0.0
+                    row_correction_applying_seconds = 0.0
+
                     for j in range(nE):
                         if not valid_cell_mask[i, j]:
                             continue
-                        q, c = eqm_cell(
+
+                        q, c, obtain_seconds, apply_seconds = eqm_cell(
                             hist_vals[:, i, j],
                             model_vals[:, i, j],
                             obs_vals[:, i, j],
@@ -310,9 +394,20 @@ def main():
                             model_times,
                             obs_times,
                         )
+
                         row_qm[:, j] = q
                         row_corr[:, :, j] = c
-                    return i, row_qm, row_corr
+
+                        row_correction_obtaining_seconds += obtain_seconds
+                        row_correction_applying_seconds += apply_seconds
+
+                    return (
+                        i,
+                        row_qm,
+                        row_corr,
+                        row_correction_obtaining_seconds,
+                        row_correction_applying_seconds,
+                    )
 
                 rows = Parallel(
                     n_jobs=-1,
@@ -321,23 +416,45 @@ def main():
                     verbose=10,
                 )(delayed(process_row)(i) for i in range(nN))
 
-                for i, row_qm, row_corr in rows:
+                for (
+                    i,
+                    row_qm,
+                    row_corr,
+                    row_correction_obtaining_seconds,
+                    row_correction_applying_seconds,
+                ) in rows:
                     qm_data[:, i, :] = row_qm
                     corr_data[:, :, i, :] = row_corr
 
+                    correction_obtaining_total_seconds += (
+                        row_correction_obtaining_seconds
+                    )
+                    correction_applying_total_seconds += (
+                        row_correction_applying_seconds
+                    )
+
                 out_ds = model_ds_filtered.copy()
-                target_masked_qm = np.where(valid_cell_mask[None, :, :], qm_data, np.nan).astype(np.float32)
+
+                target_masked_qm = np.where(
+                    valid_cell_mask[None, :, :],
+                    qm_data,
+                    np.nan,
+                ).astype(np.float32)
+
                 out_ds[model_var_name] = (model_da.dims, target_masked_qm)
 
-
-
                 os.makedirs(out_dir, exist_ok=True)
+
                 out_ds.to_netcdf(output_path)
                 print(f"Saved BC EQM to {output_path}")
 
                 y_dim, x_dim = model_da.dims[1], model_da.dims[2]
 
-                corr_data = np.where(valid_cell_mask[None, None, :, :], corr_data, np.nan).astype(np.float32)
+                corr_data = np.where(
+                    valid_cell_mask[None, None, :, :],
+                    corr_data,
+                    np.nan,
+                ).astype(np.float32)
 
                 corr_ds = xr.Dataset(
                     {
@@ -353,9 +470,25 @@ def main():
                         x_dim: model_da[x_dim],
                     },
                 )
+
                 corr_ds.to_netcdf(corr_output_path)
                 print(f"Saved corrfx to {corr_output_path}")
 
+                run_total_seconds = time.perf_counter() - run_start
+
+                print(
+                    f"Timing summary for {gcm} | {var} | {period}:\n"
+                    f"  Total runtime per run: "
+                    f"{seconds_to_minutes(run_total_seconds):.2f} min\n"
+                    f"  Total correction-function obtaining time: "
+                    f"{seconds_to_minutes(correction_obtaining_total_seconds):.2f} min\n"
+                    f"  Total correction-function applying time: "
+                    f"{seconds_to_minutes(correction_applying_total_seconds):.2f} min"
+                )
+
+                corr_ds.close()
+                out_ds.close()
+                model_ds_filtered.close()
                 model_ds.close()
 
             hist_ds_filtered.close()
@@ -363,6 +496,12 @@ def main():
 
     obs_ds_tas.close()
     obs_ds_pr.close()
+
+    print(
+        f"Total script runtime: "
+        f"{seconds_to_minutes(time.perf_counter() - script_start):.2f} min"
+    )
+    print("EQM coarse-scale all cells finished")
 
 
 if __name__ == "__main__":
