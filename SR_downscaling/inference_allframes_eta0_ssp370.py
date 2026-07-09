@@ -14,9 +14,6 @@ import concurrent.futures
 
 import re
 
-
-
-
 sys.path.append(config.DDIM_PROJ_PATH)
 sys.path.append(config.LDM_PROJ_PATH)
 sys.path.append(config.DM_DIR)
@@ -29,7 +26,7 @@ from models.components.diff.denoiser.ddim import DDIMSampler
 from models.components.diff.conditioner import AFNOConditionerNetCascade
 from models.diff_module import DDIMResidualContextual
 
-#Purpose : Bicubically interpolating and then SR  GCM_pipeline/EUROCORDEX_11_RCP2.6_BC
+#Purpose : Bili. interp. and then UNet,,,+ DDIM tbs to GCM_pipeline/ALP-FINEv1.0/BC+SR
 #----------------------------------------------------------------------#
 
 def run_cdo(cmd):
@@ -50,10 +47,10 @@ def cat_file(pattern, out_path, dim="time"):
 
 #----------------------------------------------------------------------#
 
-num_samples = 5 # Deterministic for fixed random seed
+num_samples = 10 # Deterministic for fixed random seed
 eta = 0.0       # DDIM
 S = 30         # Number of DDIM steps
-manual_seed=124
+manual_seed=42
 #----------------------------------------------------------------------#
 
 
@@ -63,34 +60,49 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 #----------------------------------------------------------------------#
 
-#Files and identifiers
 
-
-ref_ds_temp = xr.open_dataset(f"{config.DATASETS_TRAINING_DIR}/TabsD_target_train_scaled.nc")
-ref_lat = ref_ds_temp["lat"].values
-ref_lon = ref_ds_temp["lon"].values
-ref_ds_precip = xr.open_dataset(f"{config.DATASETS_TRAINING_DIR}/RhiresD_target_train_scaled.nc")
-
-ref_grid_pr = f"{config.DATASETS_TRAINING_DIR}/RhiresD_step1_latlon.nc"
-ref_grid_tas = f"{config.DATASETS_TRAINING_DIR}/TabsD_step1_latlon.nc"
+ref_grid_pr = f"{config.DATASETS_TRAINING_DIR}/Swiss_Mask_HR.nc"
+ref_grid_tas = f"{config.DATASETS_TRAINING_DIR}/Swiss_Mask_HR.nc"
 
 ref_grid_pr_ds = xr.open_dataset(ref_grid_pr)
 ref_grid_tas_ds = xr.open_dataset(ref_grid_tas)
 
-#Nan masks for use later 
-mask_pr = np.isnan(ref_grid_pr_ds['RhiresD'].values[0])   # shape (240, 370)
-mask_tas = np.isnan(ref_grid_tas_ds['TabsD'].values[0])   # shape (240, 370)
+ref_lat = ref_grid_pr_ds["lat"].values
+ref_lon = ref_grid_pr_ds["lon"].values
 
+mask_pr = np.isnan(ref_grid_pr_ds["TabsD"].values)
+mask_tas = np.isnan(ref_grid_tas_ds["TabsD"].values)
 
 ref_grid_pr_ds.close()
 ref_grid_tas_ds.close()
 
 
-
 #Unique identifier for model runs. Same scenario same id runs fed together. 
+
+
 def get_id(path, var_prefix):
     fname = os.path.basename(path)
-    return fname.replace(f"{var_prefix}_day_", "")
+
+    if fname.startswith(f"{var_prefix}_day_"):
+        return fname.replace(f"{var_prefix}_day_", "")
+
+    return fname.replace(f"_{var_prefix}_", "_")
+
+def apply_mask_to_file(nc_path, var_name, mask):
+    ds = xr.open_dataset(nc_path).load()
+
+    data_var = var_name if var_name in ds.data_vars else list(ds.data_vars)[0]
+    mask_da = xr.DataArray(mask, dims=ds[data_var].dims[-2:])
+
+    ds[data_var] = ds[data_var].where(~mask_da)
+
+    tmp_path = nc_path + ".tmp"
+    ds.to_netcdf(tmp_path)
+    ds.close()
+
+    os.replace(tmp_path, nc_path)
+
+
 
 config_dict = {
     'variables': {
@@ -101,27 +113,32 @@ config_dict = {
 }
 
 
+#.---#
+
 #For ddim case only 
 
 
-
 def find_unet_file(unet_dir, pr_path, target_year):
-    # Pattern: UNet_RCP85_YYYY-YYYY_tas_{model_id}.nc
-    model_id = get_id(pr_path, 'pr')
-    pattern = re.compile(r"UNet_RCP85_(\d{4})-(\d{4})_tas_" + re.escape(model_id))
-    for fname in os.listdir(unet_dir):
+    model_id = get_id(pr_path, "pr")
+    pattern = re.compile(
+        r"UNet_ssp370_(\d{4})-(\d{4})_tas_" + re.escape(model_id) + r"(\.nc)?$"
+    )
+
+    for path in glob.glob(os.path.join(unet_dir, "**", "*"), recursive=True):
+        fname = os.path.basename(path)
         m = pattern.match(fname)
         if m:
             start, end = int(m.group(1)), int(m.group(2))
             if start <= target_year <= end:
-                return os.path.join(unet_dir, fname)
+                return path
+
     return None
 
 #----------------------------------------------------------------------#
 
-with open(f"{config.DATASETS_TRAINING_DIR}/RhiresD_scaling_params.json", 'r') as f:
+with open(f"{config.DATASETS_TRAINING_DIR}/RhiresD_bilinear_scaling_params.json", 'r') as f:
     pr_params = json.load(f)
-with open(f"{config.DATASETS_TRAINING_DIR}/TabsD_scaling_params.json", 'r') as f:
+with open(f"{config.DATASETS_TRAINING_DIR}/TabsD_bilinear_scaling_params.json", 'r') as f:
     temp_params = json.load(f)
 
 def norm_pr(x, pr_params):
@@ -140,9 +157,6 @@ def denorm_temp(x, params):
 
 #----------------------------------------------------------------------#
 
-#Elevation 
-
-
 elevation_path = f"{config.BASE_DIR}/sasthana/Downscaling/GCM_pipeline/elevation.tif"
 with rasterio.open(elevation_path) as src:
     elevation_array = src.read(1).astype(np.float32)
@@ -150,16 +164,15 @@ with rasterio.open(elevation_path) as src:
 #----------------------------------------------------------------------#
 
 
-
 unet_regr = DownscalingUnetLightning(
     in_ch=3,
     out_ch=2,
     features=[64, 128, 256, 512],
     channel_names=["precip", "temp"],
-    precip_scaling_json=f"{config.DATASETS_TRAINING_DIR}/RhiresD_scaling_params.json",
+    precip_scaling_json=f"{config.DATASETS_TRAINING_DIR}/RhiresD_bilinear_scaling_params.json",
 )
 unet_regr_ckpt = torch.load(
-    f"{config.DM_DIR}/LDM_conditional/trained_ckpts_optimised/12km/UNet_ckpts/LDM_conditional.models.unet_module.DownscalingUnetLightning_12km_logtransform_lr0.001_precip_loss_weight1.0_1.0_crps[]_factor0.5_pat3.ckpt.ckpt",
+    f"{config.LDM_PROJ_PATH}/LDM_conditional/trained_ckpts/12km/BILINEAR_LDM_conditional.models.unet_module.DownscalingUnetLightning_bs32_lr0.001_delta1.0_factor0.5_pat3.ckpt",
     map_location="cpu",
     weights_only=False
 )["state_dict"]
@@ -201,6 +214,7 @@ conditioner = AFNOConditionerNetCascade(
 
 
 
+
 ddim = DDIMResidualContextual(
     denoiser=denoiser,
     context_encoder=conditioner,
@@ -208,8 +222,8 @@ ddim = DDIMResidualContextual(
     parameterization="v",
     loss_type="l1",
     beta_schedule="cosine",
-    linear_start=1e-4,
-    linear_end=2e-2,
+    #linear_start=1e-4,
+    #linear_end=2e-2,
     cosine_s=8e-3,
     use_ema=True,
     ema_decay=0.9999,
@@ -221,7 +235,7 @@ ddim = DDIMResidualContextual(
 
 
 ddim_ckpt = torch.load(
-    f"{config.DDIM_PROJ_PATH}/trained_ckpts/12km/DDIM_checkpoint_L1_cosine_schedule_loss_parameterisation_v.ckpt",
+    f"{config.DDIM_PROJ_PATH}/trained_ckpts/12km/BILINEAR_DDIM_L1_cosine_loss_parameterisation_v.ckpt",
     map_location=device
 )
 
@@ -235,14 +249,6 @@ sampler = DDIMSampler(ddim, device=device)
 #----------------------------------------------------------------------#
 
 
-
-
-
-
-
-
-
-
 if __name__ == "__main__":
 
 
@@ -250,37 +256,52 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--start_year", type=int, required=True, help="Start year")
     parser.add_argument("--end_year", type=int, required=True, help="End year")
-    parser.add_argument("--mode", type=str, choices=["bicubic", "unet", "ddim"], required=True) #modes for models
-    parser.add_argument("--ensemble", type=str, choices=["EQM", "dOTC", "CDFT"], required=True, help="BC name (EQM, dOTC, or CDFT)")
+    parser.add_argument("--mode", type=str, choices=["bilinear", "unet", "ddim"], required=True) #modes for models
+    parser.add_argument("--ensemble", type=str, choices=["EQM_C", "dOTC", "CDF-t"], required=True, help="BC name (EQM, dOTC, or CDF-t at 12.5 kms)")
     args = parser.parse_args()
 
 #----------------------------------------------------------------------#
 
+bc_root = f"{config.BIAS_CORRECTED_DIR_SSP370}/{args.ensemble}"
 
-    #dir for BC ensembles
-    tas_dir = f"{config.BIAS_CORRECTED_DIR_RCP45}/{args.ensemble}"
-    pr_dir = f"{config.BIAS_CORRECTED_DIR_RCP45}/{args.ensemble}"
-    bicubic_dir = f"{config.BIAS_CORRECTED_DIR_RCP45}/{args.ensemble}"
+models = [
+    os.path.basename(p)
+    for p in glob.glob(os.path.join(bc_root, "*"))
+    if os.path.isdir(p)
+]
 
-    tas_files = [os.path.join(tas_dir, f) for f in os.listdir(tas_dir) if f.startswith("tas_day") and f.endswith(".nc")]
+periods = ["historical", "ssp370"]
 
+for model in models:
+    tas_files = []
+    pr_files = []
 
-    pr_files = [os.path.join(pr_dir, f) for f in os.listdir(pr_dir) if f.startswith("pr_day") and f.endswith(".nc")]
+    for period in periods:
+        tas_pattern = os.path.join(
+            bc_root, model, period, "*", "*", "*", "day", "tas", "*", "*.nc"
+        )
+        pr_pattern = os.path.join(
+            bc_root, model, period, "*", "*", "*", "day", "pr", "*", "*.nc"
+        )
 
+        tas_files.extend(glob.glob(tas_pattern))
+        pr_files.extend(glob.glob(pr_pattern))
 
+    bilinear_dir = os.path.join(
+    os.path.dirname(config.BIAS_CORRECTED_DIR_SSP370),
+    "BC+SR",
+    "Bilinear",
+    args.ensemble
+)
+    os.makedirs(bilinear_dir, exist_ok=True)
 
-    pr_dict = {get_id(f, "pr"): f for f in pr_files} 
+    pr_dict = {get_id(f, "pr"): f for f in pr_files}
+
 
 
 #----------------------------------------------------------------------#
 
-
-
-
-    #bicubically interpolating EUROCORDEX_11_RCP4.5_BC
-
-
-    if args.mode == "bicubic": 
+    if args.mode == "bilinear": 
         for tas_path in tas_files: 
             tas_id= get_id(tas_path,"tas")
             pr_path= pr_dict.get(tas_id, None) #unique id for corr pr file
@@ -293,69 +314,86 @@ if __name__ == "__main__":
                 continue
 
 
-            bicubic_tas_path = os.path.join(bicubic_dir, f"tas_bicubic_{tas_id}")
-            bicubic_pr_path= os.path.join(bicubic_dir, f"pr_bicubic_{get_id(pr_path,'pr')}")
+            tas_rel_path = os.path.relpath(tas_path, bc_root)
+            pr_rel_path = os.path.relpath(pr_path, bc_root)
+
+            bilinear_tas_path = os.path.join(bilinear_dir, tas_rel_path)
+            bilinear_pr_path = os.path.join(bilinear_dir, pr_rel_path)
+
+            os.makedirs(os.path.dirname(bilinear_tas_path), exist_ok=True)
+            os.makedirs(os.path.dirname(bilinear_pr_path), exist_ok=True)
 
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 tasks=[]
-                if not os.path.exists(bicubic_tas_path):
-                    print(f"bicubically interpolating {tas_path}")
+                if not os.path.exists(bilinear_tas_path):
+                    print(f"bilinearly interpolating {tas_path}")
 
-                    tasks.append(executor.submit(run_cdo, ["cdo", "remapbic," + ref_grid_tas, 
+                    tasks.append(executor.submit(run_cdo, ["cdo", "remapbil," + ref_grid_tas, 
                                                            tas_path, 
-                                                           bicubic_tas_path]))
+                                                           bilinear_tas_path]))
                     
                 else:
-                    print(f"{bicubic_tas_path} exists already")
+                    print(f"{bilinear_tas_path} exists already")
 
 
-                if not os.path.exists(bicubic_pr_path):
-                    print(f"Bicubically interpolating {pr_path}")
+                if not os.path.exists(bilinear_pr_path):
+                    print(f"Bilinearly interpolating {pr_path}")
 
-                    tasks.append(executor.submit(run_cdo, ["cdo", "remapbic," + ref_grid_pr, 
+                    tasks.append(executor.submit(run_cdo, ["cdo", "remapbil," + ref_grid_pr, 
                                                            pr_path, 
-                                                           bicubic_pr_path]))
+                                                           bilinear_pr_path]))
                     
 
                 else:
-                    print(f"{bicubic_pr_path} exists already")
+                    print(f"{bilinear_pr_path} exists already")
                 
-                concurrent.futures.wait(tasks) #for threads to complete. 
+                for task in tasks:
+                    task.result()
+
+                apply_mask_to_file(bilinear_tas_path, "tas", mask_tas)
+                apply_mask_to_file(bilinear_pr_path, "pr", mask_pr)
 
     
 #----------------------------------------------------------------------#
 
 
-
     elif args.mode == "unet":
         batch_size = 16
 
-        bicubic_tas_files = [f for f in os.listdir(bicubic_dir) if f.startswith("tas_bicubic_") and f.endswith(".nc")]
-        bicubic_pr_files  = [f for f in os.listdir(bicubic_dir) if f.startswith("pr_bicubic_") and f.endswith(".nc")]
+        bilinear_tas_files = glob.glob(
+    os.path.join(bilinear_dir, model, "**", "day", "tas", "*", "*.nc"),
+    recursive=True
+)
+        bilinear_pr_files = glob.glob(
+    os.path.join(bilinear_dir, model, "**", "day", "pr", "*", "*.nc"),
+    recursive=True
+)
 
-        def get_model_id(fname, var_prefix):
-            return fname.replace(f"{var_prefix}_bicubic_", "").replace(".nc", "")
+        bilinear_pr_dict = {get_id(f, "pr"): f for f in bilinear_pr_files}
 
-        tas_ids = set(get_model_id(f, "tas") for f in bicubic_tas_files)
-        pr_ids  = set(get_model_id(f, "pr") for f in bicubic_pr_files)
-        common_ids = sorted(tas_ids & pr_ids)
+        for bilinear_tas_path in bilinear_tas_files:
+            model_id = get_id(bilinear_tas_path, "tas")
+            bilinear_pr_path = bilinear_pr_dict.get(model_id)
 
-        for model_id in common_ids:
+            if bilinear_pr_path is None:
+                print(f"No matching bilinear pr file for {bilinear_tas_path}")
+                continue
+
             print(f"Processing run: {model_id}")
-            bicubic_tas_path = os.path.join(bicubic_dir, f"tas_bicubic_{model_id}.nc")
-            bicubic_pr_path  = os.path.join(bicubic_dir, f"pr_bicubic_{model_id}.nc")
 
             input_ds = {
-                "precip": xr.open_dataset(bicubic_pr_path),
-                "temp": xr.open_dataset(bicubic_tas_path)
+                "precip": xr.open_dataset(bilinear_pr_path),
+                "temp": xr.open_dataset(bilinear_tas_path)
             }
             target_ds = {
-                "precip": xr.open_dataset(bicubic_pr_path),
-                "temp": xr.open_dataset(bicubic_tas_path)
+                "precip": xr.open_dataset(bilinear_pr_path),
+                "temp": xr.open_dataset(bilinear_tas_path)
             }
 
             time_start = f"{args.start_year}-01-01"
             time_end = f"{args.end_year}-12-31"
+
+
             for var in input_ds:
                 input_ds[var] = input_ds[var].sel(time=slice(time_start, time_end))
             for var in target_ds:
@@ -363,6 +401,8 @@ if __name__ == "__main__":
 
             ds = DownscalingDataset(input_ds, target_ds, config_dict, elevation_path=elevation_array)
             N = len(ds)
+
+
             print(f"Model: {model_id} | Dataloader prepared with shape: {N}")
 
             input_tensor, _ = ds[0]
@@ -381,6 +421,8 @@ if __name__ == "__main__":
             encoding = {}
 
             for batch_start in tqdm(range(0, N, batch_size), desc=f"UNet Inference for {model_id}"):
+
+
                 batch_end = min(batch_start + batch_size, N)
                 batch_inputs = []
                 for idx in range(batch_start, batch_end):
@@ -391,6 +433,8 @@ if __name__ == "__main__":
                     input_tensor_np[0] = norm_pr(input_tensor_np[0], pr_params)
                     input_tensor_np[1] = norm_temp(input_tensor_np[1], temp_params)
                     batch_inputs.append(torch.from_numpy(input_tensor_np))
+
+
                 batch_tensor = torch.stack(batch_inputs).to(device)
                 with torch.no_grad():
                     unet_pred = unet_regr(batch_tensor)
@@ -409,10 +453,11 @@ if __name__ == "__main__":
             
             for i, var in enumerate(var_names):
                 if var == "precip":
-                    unet_preds_np[:, :, :, i] = np.where(mask_pr, np.nan, unet_preds_np[:, :, :, i])
+                    unet_preds_np[:, :, :, i] = np.where(mask_pr[None, :, :], np.nan, unet_preds_np[:, :, :, i])
                 elif var == "temp":
-                    unet_preds_np[:, :, :, i] = np.where(mask_tas, np.nan, unet_preds_np[:, :, :, i])
-
+                    unet_preds_np[:, :, :, i] = np.where(mask_tas[None, :, :], np.nan, unet_preds_np[:, :, :, i])
+            
+            
             ds_unet = xr.Dataset(
                 {var: (("time", "N", "E"), unet_preds_np[:, :, :, i]) for i, var in enumerate(var_names)},
                 coords={
@@ -422,15 +467,32 @@ if __name__ == "__main__":
                 }
             )
 
-            rcp_match = re.search(r'(rcp\d+)', model_id)
-            rcp_str = rcp_match.group(1).upper() if rcp_match else "RCPXX"
-            out_path_unet = f"ALP-FINE_4.5/{args.ensemble}/UNet/UNet_{rcp_str}_{args.start_year}-{args.end_year}_tas_{model_id}.nc"
 
+
+
+            unet_out_dir = os.path.join(
+            os.path.dirname(config.BIAS_CORRECTED_DIR_SSP370),
+            "BC+SR",
+            "Bilinear_plus_UNet",
+            args.ensemble
+    )
+            os.makedirs(unet_out_dir, exist_ok=True)
+
+
+
+            unet_rel_path = os.path.relpath(bilinear_tas_path, bilinear_dir)
+            unet_rel_dir = os.path.dirname(unet_rel_path)
+
+            out_path_unet = os.path.join(
+            unet_out_dir,
+            unet_rel_dir,
+            f"UNet_ssp370_{args.start_year}-{args.end_year}_tas_{model_id}.nc"
+                )
+
+            os.makedirs(os.path.dirname(out_path_unet), exist_ok=True)
             ds_unet.to_netcdf(out_path_unet, encoding=encoding)
-            print(f"UNet O/P saved as {out_path_unet}")
-
-
-
+            ds_unet.close()
+            print(f"Saved UNet output: {out_path_unet}")
 
 
             for ds_ in input_ds.values():
@@ -444,8 +506,6 @@ if __name__ == "__main__":
 #----------------------------------------------------------------------#
 
 
-
-    
 
     elif args.mode == "ddim":
 
@@ -468,7 +528,15 @@ if __name__ == "__main__":
             print(f"Processing {tas_path} and {pr_path}")
 
             unet_ensemble = args.ensemble
-            unet_dir = f"ALP-FINE_4.5/{unet_ensemble}/UNet"
+
+
+            unet_dir = os.path.join(
+                os.path.dirname(config.BIAS_CORRECTED_DIR_SSP370),
+                "BC+SR",
+                "Bilinear_plus_UNet",
+                unet_ensemble
+            )
+            
             unet_file = find_unet_file(unet_dir, pr_path, args.start_year)
 
             if not unet_file or not os.path.exists(unet_file):
@@ -476,6 +544,9 @@ if __name__ == "__main__":
                 continue
 
             out_path_ddim = f"ALP-FINE_4.5/{args.ensemble}/DDIM/DDIM_{num_samples}samples_RCP45_{args.start_year}-{args.end_year}_tas_{get_id(pr_path, 'pr')}"
+            
+            
+            
             if os.path.exists(out_path_ddim):
                 print(f"DDIM file already exists for {pr_path}, skipping sampling.")
                 continue
@@ -509,7 +580,7 @@ if __name__ == "__main__":
                 lat2d, lon2d = np.meshgrid(ref_lat, ref_lon, indexing="ij")
             encoding = {}
 
-            # --- Collect all batches in memory ---
+
             all_ds_ddim = []
 
             for batch_start in tqdm(range(0, N, batch_size), desc="DDIM Sampling"):
@@ -544,9 +615,13 @@ if __name__ == "__main__":
                             x_T=z,
                             schedule="cosine"
                         )
+
+
                         final_pred = unet_pred + residual
                         final_pred_np = final_pred.cpu().numpy()
                         ddim_pred_denorm = np.empty_like(final_pred_np)
+
+
                         for varindex, var in enumerate(var_names):
                             if var == "precip":
                                 ddim_pred_denorm[:, varindex] = denorm_pr(final_pred_np[:, varindex], pr_params)
@@ -556,7 +631,8 @@ if __name__ == "__main__":
                                 raise ValueError(f"Unknown variable name: {var}")
                         ddim_pred_denorm_all[:, j] = ddim_pred_denorm
 
-                ddim_preds_np = np.transpose(ddim_pred_denorm_all, (0, 1, 3, 4, 2))  # [time, sample, N, E, var]
+
+                ddim_preds_np = np.transpose(ddim_pred_denorm_all, (0, 1, 3, 4, 2)) 
                 batch_times = times[batch_start:batch_end]
 
                 for i, var in enumerate(var_names):
@@ -578,7 +654,6 @@ if __name__ == "__main__":
                 all_ds_ddim.append(ds_ddim_batch)
                 ds_ddim_batch.close()
 
-            # --- Concatenate all batches and write once ---
             ds_ddim_full = xr.concat(all_ds_ddim, dim="time")
             ds_ddim_full.to_netcdf(out_path_ddim, encoding=encoding)
             ds_ddim_full.close()
