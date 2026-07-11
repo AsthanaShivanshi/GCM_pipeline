@@ -1,11 +1,11 @@
 #!/bin/bash
-#SBATCH --job-name=Bil_allcells
-#SBATCH --output=logs/bcsr/Bil_allcells_output-%A_%a.log
-#SBATCH --error=logs/bcsr/Bil_allcells_job_error-%A_%a.log
+#SBATCH --job-name=UNet_allcells
+#SBATCH --output=logs/bcsr/UNet_allcells_output-%A_%a.log
+#SBATCH --error=logs/bcsr/UNet_allcells_job_error-%A_%a.log
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
-#SBATCH --time=10:00:00
-#SBATCH --mem=64G
+#SBATCH --time=18:00:00
+#SBATCH --mem=128G
 #SBATCH --partition=gpu-l40   ##OR gpu-h100
 #SBATCH --array=0-11 ##12 blocks for 10 years each 
 #SBATCH --gres=gpu:1
@@ -24,7 +24,7 @@ END_YEARS=( 1990 2000 2010 2020 2030 2040 2050 2060 2070 2080 2090 2100)
 START_YEAR=${START_YEARS[$SLURM_ARRAY_TASK_ID]}
 END_YEAR=${END_YEARS[$SLURM_ARRAY_TASK_ID]}
 
-MODE=${MODE:-bilinear} #modes possible : bilinear, unet, ......ddim is in a separate .sh script...,,.. should be run sequentially. 
+MODE=${MODE:-unet} #modes possible : bilinear, unet, ......ddim is in a separate .sh script...,,.. should be run sequentially. 
 
 
 for ENSEMBLE in EQM_C CDF-t dOTC; do
