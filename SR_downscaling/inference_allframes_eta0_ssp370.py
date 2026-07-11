@@ -401,10 +401,9 @@ def run_unet(args, models, bilinear_dir, unet_dir, lat, lon, mask, device):
             print(f"[unet] saved {out_path} in {time.perf_counter() - t0:.1f}s")
 
 
+
 def run_ddim(args, models, unet_dir, ddim_dir, lat, lon, mask, device):
     pr_params, tas_params = load_scaling()
-    elevation = load_elevation()
-    model_unet = load_unet(device)
     sampler = load_ddim(device)
 
     config_dict = {
@@ -448,8 +447,8 @@ def run_ddim(args, models, unet_dir, ddim_dir, lat, lon, mask, device):
                     {"precip": input_ds, "temp": input_ds},
                     {"precip": target_ds, "temp": target_ds},
                     config_dict,
-                    elevation_path=elevation,
                 )
+
 
                 n = len(ds)
                 if n == 0:
@@ -474,7 +473,7 @@ def run_ddim(args, models, unet_dir, ddim_dir, lat, lon, mask, device):
                     batch = torch.stack(batch).to(device)
 
                     with torch.no_grad():
-                        unet_pred = model_unet(batch)
+                        unet_pred = batch
                         context = [(unet_pred, None)]
                         sample_shape = unet_pred.shape
                         batch_preds = np.empty(
