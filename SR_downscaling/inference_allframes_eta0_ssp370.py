@@ -26,11 +26,17 @@ from models.diff_module import DDIMResidualContextual
 from models.unet_module import DownscalingUnetLightning
 
 
+
+
+#-----#
+
 NUM_SAMPLES = 10
 ETA = 0.0
 DDIM_STEPS = 30
 SEED = 42
 
+
+#-----#
 
 def get_period(path):
     if "/historical/" in path:
@@ -402,6 +408,8 @@ def run_unet(args, models, bilinear_dir, unet_dir, lat, lon, mask, device):
 
 
 
+
+
 def run_ddim(args, models, unet_dir, ddim_dir, lat, lon, mask, device):
     pr_params, tas_params = load_scaling()
     sampler = load_ddim(device)
@@ -425,116 +433,119 @@ def run_ddim(args, models, unet_dir, ddim_dir, lat, lon, mask, device):
             )
 
             for unet_file in unet_files:
-                t0 = time.perf_counter()
+                for year in range(y0, y1 + 1):  # processing yrly
+                    t0 = time.perf_counter()
 
-                rel_dir = os.path.dirname(os.path.relpath(unet_file, unet_dir))
-                out_path = os.path.join(
-                    ddim_dir,
-                    rel_dir,
-                    f"DDIM_{NUM_SAMPLES}samples_{period}_{y0}-{y1}_{os.path.basename(unet_file)}",
-                )
+                    rel_dir = os.path.dirname(os.path.relpath(unet_file, unet_dir))
+                    out_path = os.path.join(
+                        ddim_dir,
+                        rel_dir,
+                        f"DDIM_{NUM_SAMPLES}samples_{period}_{year}-{year}_{os.path.basename(unet_file)}",
+                    ) 
 
-                if os.path.exists(out_path):
-                    print(f"[ddim] exists: {out_path}")
-                    continue
+                    if os.path.exists(out_path):
+                        print(f"[ddim] exists: {out_path}")
+                        continue
 
-                os.makedirs(os.path.dirname(out_path), exist_ok=True)
+                    os.makedirs(os.path.dirname(out_path), exist_ok=True)
 
-                input_ds = xr.open_dataset(unet_file).sel(time=slice(f"{y0}-01-01", f"{y1}-12-31"))
-                target_ds = input_ds
+                    input_ds = xr.open_dataset(unet_file).sel(
+                        time=slice(f"{year}-01-01", f"{year}-12-31")
+                    )  
+                    target_ds = input_ds
 
-                ds = DownscalingDataset(
-                    {"precip": input_ds, "temp": input_ds},
-                    {"precip": target_ds, "temp": target_ds},
-                    config_dict,
-                )
+                    ds = DownscalingDataset(
+                        {"precip": input_ds, "temp": input_ds},
+                        {"precip": target_ds, "temp": target_ds},
+                        config_dict,
+                    )
 
+                    n = len(ds)
+                    if n == 0:
+                        input_ds.close()
+                        continue
 
-                n = len(ds)
-                if n == 0:
-                    continue
+                    sample, _ = ds[0]
+                    spatial_shape = sample.shape[1:]
+                    times = input_ds["time"].values
+                    batches = []
 
-                sample, _ = ds[0]
-                spatial_shape = sample.shape[1:]
-                times = input_ds["time"].values
-                batches = []
+                    for start in tqdm(range(0, n, batch_size), desc=f"DDIM {year} {os.path.basename(unet_file)}"):
+                        end = min(start + batch_size, n)
+                        batch = []
 
-                for start in tqdm(range(0, n, batch_size), desc=f"DDIM {os.path.basename(unet_file)}"):
-                    end = min(start + batch_size, n)
-                    batch = []
+                        for idx in range(start, end):
+                            x, _ = ds[idx]
+                            x = x.numpy()
+                            x[0] = norm_pr(x[0], pr_params)
+                            x[1] = norm_tas(x[1], tas_params)
+                            batch.append(torch.from_numpy(x))
 
-                    for idx in range(start, end):
-                        x, _ = ds[idx]
-                        x = x.numpy()
-                        x[0] = norm_pr(x[0], pr_params)
-                        x[1] = norm_tas(x[1], tas_params)
-                        batch.append(torch.from_numpy(x))
+                        batch = torch.stack(batch).to(device)
 
-                    batch = torch.stack(batch).to(device)
-
-                    with torch.no_grad():
-                        unet_pred = batch
-                        context = [(unet_pred, None)]
-                        sample_shape = unet_pred.shape
-                        batch_preds = np.empty(
-                            (end - start, NUM_SAMPLES, *sample_shape[1:]),
-                            dtype=np.float32,
-                        )
-
-                        for s in range(NUM_SAMPLES):
-                            torch.manual_seed(SEED + s)
-                            np.random.seed(SEED + s)
-
-                            z = torch.randn((end - start, *sample_shape[1:]), device=device)
-                            residual, _ = sampler.sample(
-                                S=DDIM_STEPS,
-                                batch_size=end - start,
-                                shape=sample_shape[1:],
-                                conditioning=context,
-                                eta=ETA,
-                                verbose=False,
-                                x_T=z,
-                                schedule="cosine",
+                        with torch.no_grad():
+                            unet_pred = batch
+                            context = [(unet_pred, None)]
+                            sample_shape = unet_pred.shape
+                            batch_preds = np.empty(
+                                (end - start, NUM_SAMPLES, *sample_shape[1:]),
+                                dtype=np.float32,
                             )
 
-                            y = (unet_pred + residual).cpu().numpy()
-                            y_denorm = np.empty_like(y)
-                            y_denorm[:, 0] = denorm_pr(y[:, 0], pr_params)
-                            y_denorm[:, 1] = denorm_tas(y[:, 1], tas_params)
-                            batch_preds[:, s] = y_denorm
+                            for s in range(NUM_SAMPLES):
+                                torch.manual_seed(SEED + s)
+                                np.random.seed(SEED + s)
 
-                    batch_preds = np.transpose(batch_preds, (0, 1, 3, 4, 2))
-                    batch_preds[:, :, :, :, 0] = np.where(
-                        mask[None, None, :, :], np.nan, batch_preds[:, :, :, :, 0]
-                    )
-                    batch_preds[:, :, :, :, 1] = np.where(
-                        mask[None, None, :, :], np.nan, batch_preds[:, :, :, :, 1]
-                    )
+                                z = torch.randn((end - start, *sample_shape[1:]), device=device)
+                                residual, _ = sampler.sample(
+                                    S=DDIM_STEPS,
+                                    batch_size=end - start,
+                                    shape=sample_shape[1:],
+                                    conditioning=context,
+                                    eta=ETA,
+                                    verbose=False,
+                                    x_T=z,
+                                    schedule="cosine",
+                                )
 
-                    coords = {
-                        "time": times[start:end],
-                        "sample": np.arange(NUM_SAMPLES),
-                    }
-                    if lat2d is not None:
-                        coords["lat"] = (("N", "E"), lat2d)
-                        coords["lon"] = (("N", "E"), lon2d)
+                                y = (unet_pred + residual).cpu().numpy()
+                                y_denorm = np.empty_like(y)
+                                y_denorm[:, 0] = denorm_pr(y[:, 0], pr_params)
+                                y_denorm[:, 1] = denorm_tas(y[:, 1], tas_params)
+                                batch_preds[:, s] = y_denorm
 
-                    batches.append(
-                        xr.Dataset(
-                            {
-                                "precip": (("time", "sample", "N", "E"), batch_preds[:, :, :, :, 0]),
-                                "temp": (("time", "sample", "N", "E"), batch_preds[:, :, :, :, 1]),
-                            },
-                            coords=coords,
+                        batch_preds = np.transpose(batch_preds, (0, 1, 3, 4, 2))
+                        batch_preds[:, :, :, :, 0] = np.where(
+                            mask[None, None, :, :], np.nan, batch_preds[:, :, :, :, 0]
                         )
-                    )
+                        batch_preds[:, :, :, :, 1] = np.where(
+                            mask[None, None, :, :], np.nan, batch_preds[:, :, :, :, 1]
+                        )
 
-                out_ds = xr.concat(batches, dim="time")
-                out_ds.to_netcdf(out_path)
-                out_ds.close()
-                input_ds.close()
+                        coords = {
+                            "time": times[start:end],
+                            "sample": np.arange(NUM_SAMPLES),
+                        }
+                        if lat2d is not None:
+                            coords["lat"] = (("N", "E"), lat2d)
+                            coords["lon"] = (("N", "E"), lon2d)
 
-                print(f"[ddim] saved {out_path} in {time.perf_counter() - t0:.1f}s")
+                        batches.append(
+                            xr.Dataset(
+                                {
+                                    "precip": (("time", "sample", "N", "E"), batch_preds[:, :, :, :, 0]),
+                                    "temp": (("time", "sample", "N", "E"), batch_preds[:, :, :, :, 1]),
+                                },
+                                coords=coords,
+                            )
+                        )
+
+                    out_ds = xr.concat(batches, dim="time")
+                    out_ds.to_netcdf(out_path)
+                    out_ds.close()
+                    input_ds.close()
+
+                    print(f"[ddim] saved {out_path} in {time.perf_counter() - t0:.1f}s")
 
 
 def main():
