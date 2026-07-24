@@ -1,12 +1,12 @@
 #!/bin/bash
-#SBATCH --job-name=UNet_allcells
-#SBATCH --output=logs/bcsr/UNet_allcells_output-%A_%a.log
-#SBATCH --error=logs/bcsr/UNet_allcells_job_error-%A_%a.log
+#SBATCH --job-name=Bilinear_UNet_dOTC
+#SBATCH --output=logs/bcsr/Bilinear_UNet_dOTC_output-%A_%a.log
+#SBATCH --error=logs/bcsr/Bilinear_UNet_dOTC_job_error-%A_%a.log
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
-#SBATCH --time=18:00:00
+#SBATCH --time=02:00:00
 #SBATCH --mem=128G
-#SBATCH --partition=gpu-l40   ##OR gpu-h100
+#SBATCH --partition=gpu-l40   ##OR gpu-h100 or gpu
 #SBATCH --array=0-11 ##12 blocks for 10 years each 
 #SBATCH --gres=gpu:1
 
@@ -26,8 +26,8 @@ END_YEAR=${END_YEARS[$SLURM_ARRAY_TASK_ID]}
 
 MODE=${MODE:-unet} #modes possible : bilinear, unet, ......ddim is in a separate .sh script...,,.. should be run sequentially. 
 
-
-for ENSEMBLE in EQM_C CDF-t dOTC; do
+#EQM_C CDF-t dOTC
+for ENSEMBLE in dOTC; do #note to self : processed dotc again because projections werent present in the foklder !!
     echo "($START_YEAR-$END_YEAR) started in mode $MODE for ensemble $ENSEMBLE"
     python SR_downscaling/inference_allframes_eta0_ssp370.py --start_year $START_YEAR --end_year $END_YEAR --mode $MODE --ensemble $ENSEMBLE
     echo "$MODE for ssp370 ($START_YEAR-$END_YEAR) finished for $ENSEMBLE"

@@ -241,7 +241,7 @@ def main():
     )
 
     model_root = root / "Downscaling/GCM_pipeline/ALP-FINEv1.0/Swiss"
-    out_root = root / "Downscaling/GCM_pipeline/ALP-FINEv1.0/BC/dOTC_Coarse"
+    out_root = root / "Downscaling/GCM_pipeline/ALP-FINEv1.0/BC/dOTC"
 
     gcms = ["EC-Earth3-Veg", "MPI-ESM1-2-HR", "NorESM2-MM"]
     periods = ["historical", "ssp370"]

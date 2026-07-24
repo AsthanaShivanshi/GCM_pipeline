@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --job-name=CDFT_Compute_BC_Coarse_singlerun
-#SBATCH --output=logs/bc/CDFT_Compute_BC_Coarse_singlerun_output-%j.log
-#SBATCH --error=logs/bc/CDFT_Compute_BC_Coarse_singlerun_error-%j.log
+#SBATCH --job-name=dOTC
+#SBATCH --output=logs/bc/dOTC-%j.log
+#SBATCH --error=logs/bc/dOTC-%j.log
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --time=20:00:00
@@ -24,15 +24,15 @@ export NUMEXPR_NUM_THREADS=$SLURM_CPUS_PER_TASK
 #echo "EQM for all cells finished"
 
 
-#echo "dOTC Coarse for All Cells started"
-#python dOTC_BC_allcells.py --n_jobs $SLURM_CPUS_PER_TASK
-#echo "dOTC Coarse for all cells finished"
+echo "dOTC Coarse for All Cells started"
+python dOTC_BC_allcells.py --n_jobs $SLURM_CPUS_PER_TASK
+echo "dOTC Coarse for all cells finished"
 
 
-echo "CDFt Coarse for All Cells started"
-python CDFt_BC_allcells.py --n_jobs $SLURM_CPUS_PER_TASK 
+#echo "CDFt Coarse for All Cells started"
+#python CDFt_BC_allcells.py --n_jobs $SLURM_CPUS_PER_TASK 
 
-echo "CDFt for all cells finished"
+#echo "CDFt for all cells finished"
 
 
 

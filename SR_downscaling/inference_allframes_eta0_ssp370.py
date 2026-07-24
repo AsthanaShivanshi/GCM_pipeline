@@ -425,127 +425,164 @@ def run_ddim(args, models, unet_dir, ddim_dir, lat, lon, mask, device):
     lat2d, lon2d = latlon_2d(lat, lon)
     batch_size = 16
 
+    target_years = set(range(args.start_year, args.end_year + 1))
+
+    print(f"[ddim] unet_dir = {unet_dir}")
+    print(f"[ddim] ddim_dir = {ddim_dir}")
+    print(f"[ddim] models   = {models}")
+    print(f"[ddim] target_years = {sorted(target_years)}")
+
     for model in models:
-        for period, y0, y1 in year_windows(args.start_year, args.end_year):
-            unet_files = glob.glob(
-                os.path.join(unet_dir, model, period, "**", f"UNet_{period}_{y0}-{y1}_tas_*.nc"),
-                recursive=True,
-            )
+        search_pattern = os.path.join(unet_dir, model, "**", "UNet_*.nc")
+        print(f"[ddim] glob pattern: {search_pattern}")
 
-            for unet_file in unet_files:
-                for year in range(y0, y1 + 1):  # processing yrly
-                    t0 = time.perf_counter()
+        all_unet_files = glob.glob(search_pattern, recursive=True)
+        print(f"[ddim] found {len(all_unet_files)} UNet files for model {model}")
+        for f in all_unet_files[:3]:
+            print(f"  -> {f}")
 
-                    rel_dir = os.path.dirname(os.path.relpath(unet_file, unet_dir))
-                    out_path = os.path.join(
-                        ddim_dir,
-                        rel_dir,
-                        f"DDIM_{NUM_SAMPLES}samples_{period}_{year}-{year}_{os.path.basename(unet_file)}",
-                    ) 
+        if not all_unet_files:
+            print(f"[ddim] No UNet files found for model {model} under {unet_dir}")
+            continue
 
-                    if os.path.exists(out_path):
-                        print(f"[ddim] exists: {out_path}")
-                        continue
+        for unet_file in all_unet_files:
+            fname = os.path.basename(unet_file)
+            try:
+                parts = fname.split("_")
+                file_period_str = next(p for p in parts if len(p) == 9 and p[4] == "-" and p[:4].isdigit())
+                file_y0, file_y1 = int(file_period_str[:4]), int(file_period_str[5:])
+            except (StopIteration, ValueError):
+                print(f"[ddim] Could not parse year range from {fname}, skipping")
+                continue
 
-                    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+            file_years = set(range(file_y0, file_y1 + 1))
+            years_to_process = sorted(target_years & file_years)
 
-                    input_ds = xr.open_dataset(unet_file).sel(
-                        time=slice(f"{year}-01-01", f"{year}-12-31")
-                    )  
-                    target_ds = input_ds
+            print(f"[ddim] {fname}: file_years={file_y0}-{file_y1}, years_to_process={years_to_process}")
 
-                    ds = DownscalingDataset(
-                        {"precip": input_ds, "temp": input_ds},
-                        {"precip": target_ds, "temp": target_ds},
-                        config_dict,
+            if not years_to_process:
+                continue
+
+            for year in years_to_process:
+                period = "historical" if year <= 2014 else "ssp370"
+                t0 = time.perf_counter()
+
+                rel_dir = os.path.dirname(os.path.relpath(unet_file, unet_dir))
+                out_path = os.path.join(
+                    ddim_dir,
+                    rel_dir,
+                    f"DDIM_{NUM_SAMPLES}samples_{period}_{year}-{year}_{fname}",
+                )
+
+                print(f"[ddim] out_path: {out_path}")
+
+                if os.path.exists(out_path):
+                    print(f"[ddim] exists: {out_path}")
+                    continue
+
+                os.makedirs(os.path.dirname(out_path), exist_ok=True)
+
+                input_ds = xr.open_dataset(unet_file).sel(
+                    time=slice(f"{year}-01-01", f"{year}-12-31")
+                )
+                target_ds = input_ds
+
+                ds = DownscalingDataset(
+                    {"precip": input_ds, "temp": input_ds},
+                    {"precip": target_ds, "temp": target_ds},
+                    config_dict,
+                )
+
+                n = len(ds)
+                print(f"[ddim] year={year}, n={n} timesteps in dataset")
+                if n == 0:
+                    print(f"[ddim] No data for year {year} in {unet_file}")
+                    print(f"[ddim] Available times: {input_ds['time'].values[:5]} ...")
+                    input_ds.close()
+                    continue
+
+                sample, _ = ds[0]
+                spatial_shape = sample.shape[1:]
+                times = input_ds["time"].values
+                batches = []
+
+                for start in tqdm(range(0, n, batch_size), desc=f"DDIM {year} {fname}"):
+                    end = min(start + batch_size, n)
+                    batch = []
+
+                    for idx in range(start, end):
+                        x, _ = ds[idx]
+                        x = x.numpy()
+                        x[0] = norm_pr(x[0], pr_params)
+                        x[1] = norm_tas(x[1], tas_params)
+                        batch.append(torch.from_numpy(x))
+
+                    batch = torch.stack(batch).to(device)
+
+                    with torch.no_grad():
+                        unet_pred = batch
+                        context = [(unet_pred, None)]
+                        sample_shape = unet_pred.shape
+                        batch_preds = np.empty(
+                            (end - start, NUM_SAMPLES, *sample_shape[1:]),
+                            dtype=np.float32,
+                        )
+
+                        for s in range(NUM_SAMPLES):
+                            torch.manual_seed(SEED + s)
+                            np.random.seed(SEED + s)
+
+                            z = torch.randn((end - start, *sample_shape[1:]), device=device)
+                            residual, _ = sampler.sample(
+                                S=DDIM_STEPS,
+                                batch_size=end - start,
+                                shape=sample_shape[1:],
+                                conditioning=context,
+                                eta=ETA,
+                                verbose=False,
+                                x_T=z,
+                                schedule="cosine",
+                            )
+
+                            y = (unet_pred + residual).cpu().numpy()
+                            y_denorm = np.empty_like(y)
+                            y_denorm[:, 0] = denorm_pr(y[:, 0], pr_params)
+                            y_denorm[:, 1] = denorm_tas(y[:, 1], tas_params)
+                            batch_preds[:, s] = y_denorm
+
+                    batch_preds = np.transpose(batch_preds, (0, 1, 3, 4, 2))
+                    batch_preds[:, :, :, :, 0] = np.where(
+                        mask[None, None, :, :], np.nan, batch_preds[:, :, :, :, 0]
+                    )
+                    batch_preds[:, :, :, :, 1] = np.where(
+                        mask[None, None, :, :], np.nan, batch_preds[:, :, :, :, 1]
                     )
 
-                    n = len(ds)
-                    if n == 0:
-                        input_ds.close()
-                        continue
+                    coords = {
+                        "time": times[start:end],
+                        "sample": np.arange(NUM_SAMPLES),
+                    }
+                    if lat2d is not None:
+                        coords["lat"] = (("N", "E"), lat2d)
+                        coords["lon"] = (("N", "E"), lon2d)
 
-                    sample, _ = ds[0]
-                    spatial_shape = sample.shape[1:]
-                    times = input_ds["time"].values
-                    batches = []
-
-                    for start in tqdm(range(0, n, batch_size), desc=f"DDIM {year} {os.path.basename(unet_file)}"):
-                        end = min(start + batch_size, n)
-                        batch = []
-
-                        for idx in range(start, end):
-                            x, _ = ds[idx]
-                            x = x.numpy()
-                            x[0] = norm_pr(x[0], pr_params)
-                            x[1] = norm_tas(x[1], tas_params)
-                            batch.append(torch.from_numpy(x))
-
-                        batch = torch.stack(batch).to(device)
-
-                        with torch.no_grad():
-                            unet_pred = batch
-                            context = [(unet_pred, None)]
-                            sample_shape = unet_pred.shape
-                            batch_preds = np.empty(
-                                (end - start, NUM_SAMPLES, *sample_shape[1:]),
-                                dtype=np.float32,
-                            )
-
-                            for s in range(NUM_SAMPLES):
-                                torch.manual_seed(SEED + s)
-                                np.random.seed(SEED + s)
-
-                                z = torch.randn((end - start, *sample_shape[1:]), device=device)
-                                residual, _ = sampler.sample(
-                                    S=DDIM_STEPS,
-                                    batch_size=end - start,
-                                    shape=sample_shape[1:],
-                                    conditioning=context,
-                                    eta=ETA,
-                                    verbose=False,
-                                    x_T=z,
-                                    schedule="cosine",
-                                )
-
-                                y = (unet_pred + residual).cpu().numpy()
-                                y_denorm = np.empty_like(y)
-                                y_denorm[:, 0] = denorm_pr(y[:, 0], pr_params)
-                                y_denorm[:, 1] = denorm_tas(y[:, 1], tas_params)
-                                batch_preds[:, s] = y_denorm
-
-                        batch_preds = np.transpose(batch_preds, (0, 1, 3, 4, 2))
-                        batch_preds[:, :, :, :, 0] = np.where(
-                            mask[None, None, :, :], np.nan, batch_preds[:, :, :, :, 0]
+                    batches.append(
+                        xr.Dataset(
+                            {
+                                "precip": (("time", "sample", "N", "E"), batch_preds[:, :, :, :, 0]),
+                                "temp": (("time", "sample", "N", "E"), batch_preds[:, :, :, :, 1]),
+                            },
+                            coords=coords,
                         )
-                        batch_preds[:, :, :, :, 1] = np.where(
-                            mask[None, None, :, :], np.nan, batch_preds[:, :, :, :, 1]
-                        )
+                    )
 
-                        coords = {
-                            "time": times[start:end],
-                            "sample": np.arange(NUM_SAMPLES),
-                        }
-                        if lat2d is not None:
-                            coords["lat"] = (("N", "E"), lat2d)
-                            coords["lon"] = (("N", "E"), lon2d)
+                out_ds = xr.concat(batches, dim="time")
+                out_ds.to_netcdf(out_path)
+                out_ds.close()
+                input_ds.close()
 
-                        batches.append(
-                            xr.Dataset(
-                                {
-                                    "precip": (("time", "sample", "N", "E"), batch_preds[:, :, :, :, 0]),
-                                    "temp": (("time", "sample", "N", "E"), batch_preds[:, :, :, :, 1]),
-                                },
-                                coords=coords,
-                            )
-                        )
+                print(f"[ddim] saved {out_path} in {time.perf_counter() - t0:.1f}s")
 
-                    out_ds = xr.concat(batches, dim="time")
-                    out_ds.to_netcdf(out_path)
-                    out_ds.close()
-                    input_ds.close()
-
-                    print(f"[ddim] saved {out_path} in {time.perf_counter() - t0:.1f}s")
 
 
 def main():
